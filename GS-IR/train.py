@@ -374,6 +374,42 @@ def training(
             if iteration % 10 == 0:
                 progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{7}f}"})
                 progress_bar.update(10)
+                        
+                # 每 100 次迭代输出详细训练指标（用于 GUI 绘图）
+                if iteration % 100 == 0:
+                    # 格式化输出，确保前端能正确解析
+                    loss_str = f"{ema_loss_for_log:.7f}"
+                            
+                    # 计算 PSNR
+                    psnr_val = None
+                    try:
+                        with torch.no_grad():
+                            psnr_val = psnr(image, gt_image).item()
+                    except Exception as e:
+                        print(f"PSNR 计算失败：{e}", flush=True)
+                            
+                    # 保存预览图
+                    preview_path = None
+                    try:
+                        point_dir = os.path.join(args.model_path, "point")
+                        os.makedirs(point_dir, exist_ok=True)
+                        preview_path = os.path.join(point_dir, f"render_{iteration}.png")
+                        from torchvision.utils import save_image
+                        save_image(image.clamp(0.0, 1.0), preview_path)
+                    except Exception as e:
+                        print(f"预览图保存失败：{e}", flush=True)
+                            
+                    # 重要：使用 sys.stdout.write 并立即刷新，避免被 tqdm 影响
+                    import sys
+                    sys.stdout.write(f"\n=== TRAINING_ITERATION {iteration} ===\n")
+                    sys.stdout.write(f"LOSS_VALUE: {loss_str}\n")
+                    if psnr_val is not None:
+                        sys.stdout.write(f"PSNR_VALUE: {psnr_val:.6f}\n")
+                    if preview_path:
+                        sys.stdout.write(f"PREVIEW_SAVED: {preview_path}\n")
+                    sys.stdout.write(f"=== END_ITERATION {iteration} ===\n")
+                    sys.stdout.flush()  # 立即刷新缓冲区
+                            
             if iteration == opt.iterations:
                 progress_bar.close()
 
@@ -701,8 +737,9 @@ def training_report(
                 psnr_test /= len(config["cameras"])
                 ssim_test /= len(config["cameras"])
                 l1_test /= len(config["cameras"])
+                # 增强输出格式以便 GUI 解析
                 print(
-                    f"\n[ITER {iteration}] Evaluating {config['name']}: L1 {l1_test:.6f} PSNR {psnr_test:.6f} SSIM {ssim_test:.6f}"
+                    f"\n[ITER {iteration}] Evaluating {config['name']}: L1 {l1_test:.6f} PSNR: {psnr_test:.6f} SSIM {ssim_test:.6f}"
                 )
                 if tb_writer:
                     tb_writer.add_scalar(
