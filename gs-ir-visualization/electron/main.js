@@ -179,7 +179,125 @@ ipcMain.handle('start-training', async (event, config) => {
       throw new Error(`Python 环境未就绪：${validation.error}`);
     }
     
-    const { modelPath, sourcePath, iterations, eval: evalMode, gamma, indirect, checkpoint, resolution } = config;
+    const { modelPath, sourcePath, iterations, eval: evalMode, gamma, indirect, checkpoint, resolution, imageSubdir } = config;
+    
+    // 检查输出目录是否为空
+    try {
+      const dirExists = await fs.access(modelPath).then(() => true).catch(() => false);
+      if (dirExists) {
+        const files = await fs.readdir(modelPath);
+        if (files.length > 0) {
+          // 输出目录非空，需要用户确认
+          const result = await dialog.showMessageBox(mainWindow, {
+            type: 'warning',
+            buttons: ['继续训练', '取消'],
+            defaultId: 1,
+            title: '输出目录非空',
+            message: `输出目录 "${modelPath}" 非空（包含 ${files.length} 个文件）。`,
+            detail: '继续训练可能会覆盖现有文件。是否继续？',
+          });
+          
+          if (result.response !== 0) {
+            return { success: false, error: '用户取消了训练' };
+          }
+        }
+      }
+    } catch (err) {
+      // 目录不存在是正常的，不需要处理
+      console.log('输出目录不存在，将创建新目录');
+    }
+    
+    // 检查数据集格式是否需要转换
+    mainWindow.webContents.send('training-output', { 
+      type: 'stdout', 
+      data: '\n========== 数据集格式检查 ==========\n' 
+    });
+    
+    // 检查关键目录是否存在
+    const sparsePath = path.join(sourcePath, 'sparse/0');
+    const imagesPath = path.join(sourcePath, 'images');
+    
+    const sparseExists = await fs.access(sparsePath).then(() => true).catch(() => false);
+    const imagesExists = await fs.access(imagesPath).then(() => true).catch(() => false);
+    
+    let needsConversion = false;
+    
+    if (!sparseExists || !imagesExists) {
+      needsConversion = true;
+      mainWindow.webContents.send('training-output', { 
+        type: 'stdout', 
+        data: '⚠ 需要运行 convert.py 进行数据集转换\n' 
+      });
+      
+      mainWindow.webContents.send('training-output', { 
+        type: 'stdout', 
+        data: '开始执行 python convert.py -s ' + sourcePath + '\n\n' 
+      });
+      
+      // 准备转换脚本参数
+      const convertScriptPath = path.join(__dirname, '../../tools/gaussian-splatting/convert.py');
+      const convertArgs = ['-s', sourcePath];
+      
+      // 验证脚本文件是否存在
+      const scriptExists = await fs.access(convertScriptPath).then(() => true).catch(() => false);
+      if (!scriptExists) {
+        throw new Error(`找不到转换脚本：${convertScriptPath}`);
+      }
+      
+      mainWindow.webContents.send('training-output', { 
+        type: 'stdout', 
+        data: `转换脚本：${convertScriptPath}\n` 
+      });
+      
+      // 运行转换脚本 - 只执行 python convert.py -s <filedir>
+      const convertProcess = envManager.runPythonScript(convertScriptPath, convertArgs, {
+        cwd: path.join(__dirname, '../../tools/gaussian-splatting'),
+        env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
+      });
+      
+      // 等待转换完成
+      await new Promise((resolve, reject) => {
+        convertProcess.stdout.on('data', (data) => {
+          const output = data.toString();
+          console.log('[CONVERT]', output);
+          mainWindow.webContents.send('training-output', { type: 'stdout', data: output });
+        });
+        
+        convertProcess.stderr.on('data', (data) => {
+          const output = data.toString();
+          console.error('[CONVERT ERROR]', output);
+          mainWindow.webContents.send('training-output', { type: 'stderr', data: output });
+        });
+        
+        convertProcess.on('close', (code) => {
+          console.log(`[CONVERT] 进程退出，代码：${code}`);
+          if (code === 0) {
+            resolve();
+          } else {
+            reject(new Error(`转换失败，退出代码：${code}`));
+          }
+        });
+        
+        convertProcess.on('error', (err) => {
+          console.error('[CONVERT] 进程错误:', err);
+          reject(err);
+        });
+      });
+      
+      mainWindow.webContents.send('training-output', { 
+        type: 'stdout', 
+        data: '\n✓ 数据集转换完成！\n\n' 
+      });
+    } else {
+      mainWindow.webContents.send('training-output', { 
+        type: 'stdout', 
+        data: '✓ 数据集格式检查通过 (COLMAP 格式已存在)\n' 
+      });
+      mainWindow.webContents.send('training-output', { 
+        type: 'stdout', 
+        data: '========================================\n\n' 
+      });
+    }
     
     // 构建命令参数
     const args = [
@@ -188,12 +306,27 @@ ipcMain.handle('start-training', async (event, config) => {
       '--iterations', iterations.toString()
     ];
     
+    // 添加图片子目录参数
+    if (imageSubdir && imageSubdir !== 'images') {
+      args.push('-i', imageSubdir);
+    }
+    
     if (evalMode) args.push('--eval');
     if (gamma) args.push('--gamma');
     if (indirect) args.push('--indirect');
-    if (resolution && resolution > 1) {
-      args.push('-r', resolution.toString());
+    
+    // 处理分辨率参数
+    // 注意：image_<num> 目录已经是压缩过的图像，所以-r 参数始终为 2（除了原始分辨率）
+    let resolutionParam = resolution;
+    if (resolution >= 2) {
+      // 对于 1/2, 1/4, 1/8, 1/16 分辨率，-r 参数都设为 2
+      // 因为 image_<num> 目录已经提供了第一级压缩
+      resolutionParam = 2;
     }
+    if (resolutionParam && resolutionParam > 1) {
+      args.push('-r', resolutionParam.toString());
+    }
+    
     if (checkpoint) {
       args.push('--start_checkpoint', checkpoint);
     }
@@ -311,12 +444,69 @@ ipcMain.handle('stop-baking', async () => {
   }
 });
 
+ipcMain.handle('stop-conversion', async () => {
+  try {
+    if (conversionProcess) {
+      conversionProcess.kill();
+      conversionProcess = null;
+      return { success: true };
+    }
+    return { success: false, error: '没有正在运行的转换进程' };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
 // 停止环境安装
 ipcMain.handle('stop-installation', async () => {
   try {
     const stopped = await envManager.stopInstallation();
     return { success: stopped, message: stopped ? '已停止安装并清理缓存' : '没有正在运行的安装' };
   } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+// 获取最新渲染图像
+ipcMain.handle('get-latest-rendered-image', async (event, modelPath) => {
+  try {
+    // 检查路径是否存在
+    const dirExists = await fs.access(modelPath).then(() => true).catch(() => false);
+    if (!dirExists) {
+      return { success: false, error: '输出目录不存在' };
+    }
+    
+    // 查找 point 文件夹中的渲染图像
+    const pointPath = path.join(modelPath, 'point');
+    const pointDirExists = await fs.access(pointPath).then(() => true).catch(() => false);
+    
+    if (pointDirExists) {
+      const files = await fs.readdir(pointPath);
+      const pngFiles = files.filter(f => f.endsWith('.png') && !f.includes('depth'));
+      
+      if (pngFiles.length > 0) {
+        // 按修改时间排序，获取最新的图像
+        const filesWithStats = await Promise.all(
+          pngFiles.map(async (file) => {
+            const filePath = path.join(pointPath, file);
+            const stats = await fs.stat(filePath);
+            return { file, filePath, mtime: stats.mtime };
+          })
+        );
+        
+        filesWithStats.sort((a, b) => b.mtime - a.mtime);
+        const latestFile = filesWithStats[0].filePath;
+        
+        return { 
+          success: true, 
+          imagePath: latestFile 
+        };
+      }
+    }
+    
+    return { success: false, error: '未找到渲染图像' };
+  } catch (error) {
+    console.error('获取最新渲染图像失败:', error);
     return { success: false, error: error.message };
   }
 });
@@ -1063,37 +1253,78 @@ ipcMain.handle('convert-dataset', async (event, config) => {
       return { success: false, error: '数据集路径不存在' };
     }
     
-    // 构建 convert.py 命令
-    const convertScriptPath = path.join(__dirname, '../../tools/gaussian-splatting/convert.py');
-    const args = ['-s', sourcePath];
+    // 检查是否有 input 子目录，如果没有，创建它并将所有图片移动到 input
+    const inputPath = path.join(sourcePath, 'input');
+    const inputExists = await fs.access(inputPath).then(() => true).catch(() => false);
     
-    if (resize) {
-      args.push('--resize');
+    if (!inputExists) {
+      // 创建 input 目录
+      await fs.mkdir(inputPath, { recursive: true });
+      console.log('创建 input 目录:', inputPath);
+      
+      // 获取所有图片文件
+      const files = await fs.readdir(sourcePath);
+      const imageExtensions = ['.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif'];
+      const imageFiles = files.filter(f => 
+        imageExtensions.includes(path.extname(f).toLowerCase())
+      );
+      
+      console.log(`找到 ${imageFiles.length} 个图片文件，移动到 input 目录`);
+      
+      // 移动图片到 input 目录
+      for (const file of imageFiles) {
+        const srcFile = path.join(sourcePath, file);
+        const destFile = path.join(inputPath, file);
+        try {
+          await fs.rename(srcFile, destFile);
+          console.log(`移动：${file} -> input/${file}`);
+        } catch (err) {
+          console.error(`移动文件失败 ${file}:`, err);
+        }
+      }
     }
     
-    console.log('运行转换脚本:', convertScriptPath, args.join(' '));
+    // 直接使用 Python 执行 convert.py 脚本
+    const convertScriptPath = path.join(__dirname, '../../tools/gaussian-splatting/convert.py');
     
-    // 启动转换进程
-    conversionProcess = spawn(envManager.pythonPath || 'python', [convertScriptPath, ...args], {
-      cwd: path.join(__dirname, '../../tools/gaussian-splatting')
+    // 检查脚本文件是否存在
+    const scriptExists = await fs.access(convertScriptPath).then(() => true).catch(() => false);
+    if (!scriptExists) {
+      return { success: false, error: '找不到转换脚本：' + convertScriptPath };
+    }
+    
+    // 构建命令参数
+    const scriptArgs = ['-s', sourcePath];
+    if (resize) {
+      scriptArgs.push('--resize');
+    }
+    
+    console.log('运行转换脚本:', envManager.pythonPath, convertScriptPath, scriptArgs.join(' '));
+    
+    // 启动转换进程 - 使用 Python 环境管理器执行
+    conversionProcess = envManager.runPythonScript(convertScriptPath, scriptArgs, {
+      cwd: path.join(__dirname, '../../tools/gaussian-splatting'),
+      env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
     });
     
     conversionProcess.stdout.on('data', (data) => {
       const output = data.toString();
-      console.log('转换输出:', output);
-      mainWindow.webContents.send('training-output', { type: 'stdout', data: output });
+      console.log('[CONVERT]', output);
+      mainWindow.webContents.send('conversion-output', { type: 'stdout', data: output });
     });
     
     conversionProcess.stderr.on('data', (data) => {
       const output = data.toString();
-      console.error('转换错误:', output);
-      mainWindow.webContents.send('training-output', { type: 'stderr', data: output });
+      console.error('[CONVERT ERROR]', output);
+      mainWindow.webContents.send('conversion-output', { type: 'stderr', data: output });
     });
     
     const exitCode = await new Promise((resolve) => {
       conversionProcess.on('close', resolve);
     });
     
+    console.log('[CONVERT] 进程退出，代码:', exitCode);
+    mainWindow.webContents.send('conversion-close', { code: exitCode });
     conversionProcess = null;
     
     if (exitCode === 0) {

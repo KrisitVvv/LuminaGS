@@ -44,6 +44,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 数据集管理
   checkDatasetFormat: (sourcePath) => ipcRenderer.invoke('check-dataset-format', sourcePath),
   convertDataset: (config) => ipcRenderer.invoke('convert-dataset', config),
+  stopConversion: () => ipcRenderer.invoke('stop-conversion'),
+  // 监听转换输出
+  onConversionOutput: (callback) => {
+    ipcRenderer.on('conversion-output', (event, data) => callback(data));
+  },
+  onConversionClose: (callback) => {
+    ipcRenderer.on('conversion-close', (event, data) => callback(data));
+  },
+  // 获取最新渲染图像
+  getLatestRenderedImage: (modelPath) => ipcRenderer.invoke('get-latest-rendered-image', modelPath),
   // 监听训练和烘焙输出
   onTrainingOutput: (callback) => {
     ipcRenderer.on('training-output', (event, data) => callback(data));

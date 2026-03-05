@@ -44,12 +44,17 @@
             </div>
             <div class="form-group" style="margin-top: 0.75rem;">
               <label class="form-label">分辨率压缩 (-r)</label>
-              <select class="select-input" v-model.number="resolution">
+              <select class="select-input" v-model.number="resolution" @change="handleResolutionChange">
                 <option :value="1">原始分辨率 (1/1)</option>
                 <option :value="2">1/2 分辨率</option>
                 <option :value="4">1/4 分辨率</option>
                 <option :value="8">1/8 分辨率</option>
+                <option :value="16">1/16 分辨率</option>
               </select>
+              <div v-if="resolution === 16" class="help-text">
+                <span class="iconify" data-icon="solar:info-circle-linear"></span>
+                使用 image_8 目录，-r 参数自动设为 2
+              </div>
             </div>
           </div>
           
@@ -97,7 +102,6 @@
             </button>
             
             <div class="control-buttons">
-              <button class="pause-btn" @click="pauseTraining" :disabled="!isTraining">暂停</button>
               <button class="stop-btn" @click="stopTraining" :disabled="!isTraining && !isBaking">终止</button>
             </div>
             
@@ -110,8 +114,9 @@
                 <div class="alert-title">需要转换数据集格式</div>
                 <div class="alert-text">当前数据集不符合 TensoIR 或 Mip-NeRF 360 规范，需要使用 COLMAP 进行处理。</div>
               </div>
-              <button class="convert-btn" @click="startConversion">
-                <span class="iconify" data-icon="solar:refresh-linear"></span> 开始转换
+              <button class="convert-btn" @click="startConversion" :disabled="isConverting">
+                <span class="iconify" :class="{ 'spin-icon': isConverting }" :data-icon="isConverting ? 'solar:refresh-linear' : 'solar:refresh-linear'"></span> 
+                {{ isConverting ? '转换中...' : '开始转换' }}
               </button>
             </div>
           </div>
@@ -196,6 +201,54 @@
         </div>
       </div>
     </div>
+    
+    <!-- 数据集转换等待动画弹窗 -->
+    <div v-if="isConverting" class="conversion-modal-overlay">
+      <div class="conversion-modal">
+        <div class="modal-header">
+          <h3 class="modal-title">
+            <span class="iconify spin-icon" data-icon="solar:refresh-linear"></span>
+            正在运行 COLMAP
+          </h3>
+        </div>
+        
+        <div class="modal-body">
+          <!-- 加载动画 -->
+          <div class="loading-animation">
+            <div class="spinner-ring"></div>
+            <div class="spinner-ring"></div>
+            <div class="spinner-ring"></div>
+          </div>
+          
+          <!-- 进度提示 -->
+          <div class="progress-info">
+            <p class="loading-text">正在进行特征提取和三维重建</p>
+            <p class="loading-subtext">这可能需要几分钟到几小时，取决于图片数量和设备性能</p>
+          </div>
+          
+          <!-- 实时日志输出 -->
+          <div class="conversion-log-container">
+            <div class="log-header">
+              <span class="iconify" data-icon="solar:file-text-linear"></span>
+              COLMAP 输出日志
+            </div>
+            <div ref="conversionLogContainer" class="log-output">
+              <div v-for="(log, index) in conversionLogs" :key="index" class="log-line" :class="log.type">
+                <span class="log-time">{{ log.time }}</span>
+                <span class="log-message">{{ log.message }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="modal-footer">
+          <button class="cancel-btn" @click="stopConversion" :disabled="isStopping">
+            <span class="iconify" data-icon="solar:stop-circle-linear"></span>
+            {{ isStopping ? '停止中...' : '取消转换' }}
+          </button>
+        </div>
+      </div>
+    </div>
   </section>
 </template>
 
@@ -251,12 +304,13 @@ export default {
       needsConversion: false,
       conversionProgress: 0,
       isConverting: false,
-            
-      // 数据集格式
-      datasetFormat: 'unknown', // unknown, tensoir, mipnerf360, custom
-      needsConversion: false,
-      conversionProgress: 0,
-      isConverting: false,
+      isStopping: false,
+      
+      // 转换日志
+      conversionLogs: [],
+      
+      // 图片子目录选择
+      imageSubdir: 'images', // 默认值
     }
   },
   computed: {
@@ -291,6 +345,29 @@ export default {
     window.removeEventListener('resize', this.handleResize);
   },
   methods: {
+    handleResolutionChange() {
+      // 根据分辨率压缩比例自动设置图片子目录
+      // 注意：images_<num> 目录表示已经压缩过的图像
+      // images_8 = 1/8 原图大小，images_4 = 1/4 原图大小，images_2 = 1/2 原图大小
+      if (this.resolution === 16) {
+        this.imageSubdir = 'images_8';
+        // 1/16 分辨率：使用 images_8 目录（已压缩到 1/8），再通过 -r=2 压缩到 1/16
+      } else if (this.resolution === 8) {
+        this.imageSubdir = 'images_4';
+        // 1/8 分辨率：使用 images_4 目录（已压缩到 1/4），再通过 -r=2 压缩到 1/8
+      } else if (this.resolution === 4) {
+        this.imageSubdir = 'images_2';
+        // 1/4 分辨率：使用 images_2 目录（已压缩到 1/2），再通过 -r=2 压缩到 1/4
+      } else if (this.resolution === 2) {
+        this.imageSubdir = 'images';
+        // 1/2 分辨率：使用 images 目录（原图），通过 -r=2 压缩到 1/2
+      } else {
+        this.imageSubdir = 'images';
+        // 原始分辨率：使用 images 目录，不需要压缩
+      }
+      this.addLog(`分辨率压缩设置为 1/${this.resolution}，将使用 ${this.imageSubdir} 目录`, 'info');
+    },
+    
     initCharts() {
       // 初始化 Loss 图表
       const lossChartEl = this.$refs.lossChart;
@@ -416,6 +493,23 @@ export default {
       window.electronAPI?.onBakingOutput((data) => {
         this.handleBakingOutput(data);
       });
+      
+      // 监听转换输出
+      window.electronAPI?.onConversionOutput((data) => {
+        this.handleConversionOutput(data);
+      });
+      
+      // 监听转换完成
+      window.electronAPI?.onConversionClose((data) => {
+        this.handleConversionClose(data);
+      });
+      
+      // 定期更新预览图片（每 3 秒）
+      setInterval(() => {
+        if (this.isTraining && this.modelPath) {
+          this.updatePreviewImage();
+        }
+      }, 3000);
     },
     
     handleTrainingOutput(data) {
@@ -432,29 +526,59 @@ export default {
               type: data.type === 'stderr' ? 'error' : 'info'
             });
             
-            // 尝试解析 iteration 和 loss
-            const lossMatch = line.match(/Loss:\s*([0-9.]+)/);
-            if (lossMatch) {
-              const loss = parseFloat(lossMatch[1]);
-              this.updateChartData(this.currentIteration, loss);
-            }
-            
-            // 尝试解析 PSNR
-            const psnrMatch = line.match(/PSNR\s*([0-9.]+)/);
-            if (psnrMatch) {
-              const psnr = parseFloat(psnrMatch[1]);
-              this.updatePsnrData(this.currentIteration, psnr);
-            }
-            
-            // 尝试解析 iteration
-            const iterMatch = line.match(/\[ITER\s*(\d+)\]/);
+            // 1. 解析 iteration 标记
+            // 格式：=== TRAINING_ITERATION 100 ===
+            const iterMatch = line.match(/===\s*TRAINING_ITERATION\s+(\d+)\s*===/);
             if (iterMatch) {
               this.currentIteration = parseInt(iterMatch[1]);
+              console.log('[解析] 检测到迭代开始:', this.currentIteration);
+              return;
+            }
+            
+            // 2. 解析 Loss 值 - 严格匹配行首行尾
+            // 格式：LOSS_VALUE: 0.1234567
+            const lossMatch = line.match(/^LOSS_VALUE:\s*([0-9.]+)$/);
+            if (lossMatch && this.currentIteration > 0) {
+              const loss = parseFloat(lossMatch[1]);
+              console.log(`[解析] Loss=${loss}, iteration=${this.currentIteration}`);
+              this.updateChartData(this.currentIteration, loss);
+              return;
+            }
+            
+            // 3. 解析 PSNR 值 - 严格匹配行首行尾
+            // 格式：PSNR_VALUE: 32.123456
+            const psnrMatch = line.match(/^PSNR_VALUE:\s*([0-9.]+)$/);
+            if (psnrMatch && this.currentIteration > 0) {
+              const psnr = parseFloat(psnrMatch[1]);
+              console.log(`[解析] PSNR=${psnr}, iteration=${this.currentIteration}`);
+              this.updatePsnrData(this.currentIteration, psnr);
+              return;
+            }
+            
+            // 4. 解析预览图保存路径 - 严格匹配行首
+            // 格式：PREVIEW_SAVED: /path/to/render_100.png
+            const previewMatch = line.match(/^PREVIEW_SAVED:\s*(.+)$/);
+            if (previewMatch) {
+              const previewPath = previewMatch[1].trim();
+              console.log('[解析] 预览图已保存:', previewPath);
+              // 立即更新预览图（延迟一点确保文件已写入）
+              setTimeout(() => {
+                this.updatePreviewImage();
+              }, 200);
+              return;
+            }
+            
+            // 5. 旧的兼容格式（备用）
+            // 格式：[ITER 1234]
+            const oldIterMatch = line.match(/\[ITER\s+(\d+)\]/);
+            if (oldIterMatch) {
+              this.currentIteration = parseInt(oldIterMatch[1]);
+              console.log('[解析][旧格式] iteration:', this.currentIteration);
             }
           }
         });
         
-        // 滚动到底部
+        // 滚动日志到底部
         this.$nextTick(() => {
           if (this.$refs.logContainer) {
             this.$refs.logContainer.scrollTop = this.$refs.logContainer.scrollHeight;
@@ -501,43 +625,149 @@ export default {
       }
     },
     
-    updateChartData(iteration, loss) {
-      if (!this.lossChartInstance) return;
-      
-      // 添加数据点
-      const option = this.lossChartInstance.getOption();
-      const xData = option.xAxis[0].data || [];
-      const seriesData = option.series[0].data || [];
-      
-      // 避免重复
-      if (!xData.includes(iteration.toString())) {
-        xData.push(iteration.toString());
-        seriesData.push(loss);
-        
-        this.lossChartInstance.setOption({
-          xAxis: { data: xData },
-          series: [{ data: seriesData }]
+    handleConversionOutput(data) {
+      if (data.type === 'stdout' || data.type === 'stderr') {
+        // 分割多行输出，逐行添加
+        const lines = data.data.split('\n');
+        lines.forEach(line => {
+          if (line.trim()) {
+            this.addConversionLog(line, data.type === 'stderr' ? 'error' : 'info');
+          }
         });
+        this.scrollToConversionLogBottom();
+      }
+    },
+    
+    handleConversionClose(data) {
+      console.log('转换进程退出，代码:', data.code);
+      this.isConverting = false;
+      this.isStopping = false;
+      
+      if (data.code === 0) {
+        this.needsConversion = false;
+        this.addConversionLog('✓ 数据集转换完成', 'success');
+        this.addLog('数据集转换成功完成', 'success');
+        alert('数据集转换完成，可以开始训练了！');
+      } else {
+        this.addConversionLog(`✗ 转换失败，退出代码：${data.code}`, 'error');
+        this.addLog(`数据集转换失败：退出代码 ${data.code}`, 'error');
+        alert(`转换失败，退出代码：${data.code}`);
+      }
+    },
+    
+    updateChartData(iteration, loss) {
+      if (!this.lossChartInstance) {
+        console.warn('Loss 图表实例未初始化');
+        return;
+      }
+      
+      // 确保 iteration 是数字
+      const iterNum = parseInt(iteration) || 0;
+      const lossValue = parseFloat(loss);
+      
+      if (isNaN(lossValue)) {
+        console.warn('Loss 值无效:', loss);
+        return;
+      }
+      
+      console.log(`更新 Loss 图表 - iteration: ${iterNum}, loss: ${lossValue}`);
+      
+      try {
+        // 添加数据点
+        const option = this.lossChartInstance.getOption();
+        const xData = option.xAxis && option.xAxis[0] ? (option.xAxis[0].data || []) : [];
+        const seriesData = option.series && option.series[0] ? (option.series[0].data || []) : [];
+        
+        // 避免重复
+        const iterStr = iterNum.toString();
+        if (!xData.includes(iterStr)) {
+          xData.push(iterStr);
+          seriesData.push(lossValue);
+          
+          console.log(`图表数据 - X 轴点数：${xData.length}, Y 轴点数：${seriesData.length}`);
+          
+          this.lossChartInstance.setOption({
+            xAxis: { data: xData },
+            series: [{ data: seriesData }]
+          });
+          
+          console.log('Loss 图表已更新');
+        } else {
+          console.log(`iteration ${iterNum} 已存在，跳过更新`);
+        }
+      } catch (error) {
+        console.error('更新 Loss 图表失败:', error);
       }
     },
     
     updatePsnrData(iteration, psnr) {
-      if (!this.psnrChartInstance) return;
+      if (!this.psnrChartInstance) {
+        console.warn('PSNR 图表实例未初始化');
+        return;
+      }
       
-      // 添加数据点
-      const option = this.psnrChartInstance.getOption();
-      const xData = option.xAxis[0].data || [];
-      const seriesData = option.series[0].data || [];
+      // 确保 iteration 是数字
+      const iterNum = parseInt(iteration) || 0;
+      const psnrValue = parseFloat(psnr);
       
-      // 避免重复
-      if (!xData.includes(iteration.toString())) {
-        xData.push(iteration.toString());
-        seriesData.push(psnr);
+      if (isNaN(psnrValue)) {
+        console.warn('PSNR 值无效:', psnr);
+        return;
+      }
+      
+      console.log(`更新 PSNR 图表 - iteration: ${iterNum}, psnr: ${psnrValue}`);
+      
+      try {
+        // 添加数据点
+        const option = this.psnrChartInstance.getOption();
+        const xData = option.xAxis && option.xAxis[0] ? (option.xAxis[0].data || []) : [];
+        const seriesData = option.series && option.series[0] ? (option.series[0].data || []) : [];
         
-        this.psnrChartInstance.setOption({
-          xAxis: { data: xData },
-          series: [{ data: seriesData }]
-        });
+        // 避免重复
+        const iterStr = iterNum.toString();
+        if (!xData.includes(iterStr)) {
+          xData.push(iterStr);
+          seriesData.push(psnrValue);
+          
+          console.log(`PSNR 图表数据 - X 轴点数：${xData.length}, Y 轴点数：${seriesData.length}`);
+          
+          this.psnrChartInstance.setOption({
+            xAxis: { data: xData },
+            series: [{ data: seriesData }]
+          });
+          
+          console.log('PSNR 图表已更新');
+        } else {
+          console.log(`iteration ${iterNum} 已存在，跳过更新`);
+        }
+      } catch (error) {
+        console.error('更新 PSNR 图表失败:', error);
+      }
+    },
+    
+    async updatePreviewImage() {
+      if (!this.modelPath) {
+        console.log('[预览] 模型路径为空，跳过更新');
+        return;
+      }
+      
+      try {
+        const result = await window.electronAPI?.getLatestRenderedImage(this.modelPath);
+        
+        if (result && result.success && result.imagePath) {
+          // 添加时间戳避免缓存
+          const imageUrl = result.imagePath + '?t=' + Date.now();
+          
+          if (this.previewImage !== imageUrl) {
+            this.previewImage = imageUrl;
+            console.log('[预览] 图片已更新:', result.imagePath);
+          }
+        } else {
+          // 没有找到预览图是正常的，可能训练刚开始
+          console.log('[预览] 未找到渲染图像（可能是训练初期）');
+        }
+      } catch (error) {
+        console.error('[预览] 更新失败:', error);
       }
     },
     
@@ -615,6 +845,7 @@ export default {
           iterations: this.iterations,
           eval: this.evalMode,
           resolution: this.resolution,
+          imageSubdir: this.imageSubdir,
           gamma: false,
           indirect: false,
           checkpoint: null
@@ -727,6 +958,8 @@ export default {
           sourcePath: this.sourcePath,
           iterations: 35000,
           eval: this.evalMode,
+          resolution: this.resolution,
+          imageSubdir: this.imageSubdir,
           gamma: this.gamma,
           indirect: this.indirect,
           checkpoint: this.checkpoint
@@ -759,9 +992,15 @@ export default {
       
       try {
         this.isConverting = true;
+        this.isStopping = false;
+        this.conversionLogs = [];
         this.conversionProgress = 0;
-        this.addLog('开始转换数据集...', 'info');
+        this.addLog('开始运行 COLMAP 进行数据集转换...', 'info');
+        this.addConversionLog('========================================', 'info');
+        this.addConversionLog('启动 COLMAP 三维重建流程', 'success');
+        this.addConversionLog('========================================', 'info');
         
+        // 启动转换
         const result = await window.electronAPI?.convertDataset({
           sourcePath: this.sourcePath,
           resize: this.resolution > 1
@@ -771,40 +1010,92 @@ export default {
           throw new Error(result?.error || '转换失败');
         }
         
-        this.needsConversion = false;
-        this.addLog('✓ 数据集转换完成', 'success');
-        alert('数据集转换完成，可以开始训练了！');
       } catch (error) {
         console.error('数据集转换失败:', error);
+        this.addConversionLog(`错误：${error.message}`, 'error');
         this.addLog(`数据集转换失败：${error.message}`, 'error');
-        alert(`转换失败：${error.message}`);
-      } finally {
         this.isConverting = false;
+        this.isStopping = false;
+        alert(`转换失败：${error.message}`);
       }
     },
     
-    async pauseTraining() {
-      // TODO: 实现暂停功能（需要修改 Python 脚本支持暂停）
-      this.addLog('暂停功能暂未实现', 'warning');
+    async stopConversion() {
+      if (!this.isConverting) return;
+      
+      try {
+        this.isStopping = true;
+        this.addConversionLog('正在停止转换进程...', 'warning');
+        
+        // 通知后端停止转换进程
+        const result = await window.electronAPI?.stopConversion();
+        
+        if (result?.success) {
+          this.addConversionLog('转换进程已停止', 'warning');
+          this.isConverting = false;
+          this.isStopping = false;
+          this.needsConversion = true; // 保持提示，允许重新尝试
+        } else {
+          throw new Error('停止转换失败');
+        }
+      } catch (error) {
+        console.error('停止转换失败:', error);
+        this.addConversionLog(`停止失败：${error.message}`, 'error');
+        this.isStopping = false;
+      }
+    },
+    
+    addConversionLog(message, type = 'info') {
+      const now = new Date();
+      const time = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
+      this.conversionLogs.push({ time, message, type });
+      
+      // 限制日志数量
+      if (this.conversionLogs.length > 100) {
+        this.conversionLogs.shift();
+      }
+    },
+    
+    scrollToConversionLogBottom() {
+      this.$nextTick(() => {
+        if (this.$refs.conversionLogContainer) {
+          this.$refs.conversionLogContainer.scrollTop = this.$refs.conversionLogContainer.scrollHeight;
+        }
+      });
     },
     
     async stopTraining() {
       try {
         if (this.isTraining) {
-          await window.electronAPI?.stopTraining();
+          try {
+            await window.electronAPI?.stopTraining();
+          } catch (ipcError) {
+            console.warn('停止训练进程 IPC 调用失败，但继续更新本地状态:', ipcError);
+          }
           this.isTraining = false;
           this.addLog('训练已停止', 'warning');
         }
         
         if (this.isBaking) {
-          await window.electronAPI?.stopBaking();
+          try {
+            await window.electronAPI?.stopBaking();
+          } catch (ipcError) {
+            console.warn('停止烘焙进程 IPC 调用失败，但继续更新本地状态:', ipcError);
+          }
           this.isBaking = false;
           this.bakingStatus = 'error';
           this.addBakingLog('烘焙已停止', 'warning');
         }
+        
+        // 无论是否成功，都更新 UI 状态
+        this.$forceUpdate();
       } catch (error) {
-        console.error('停止训练失败:', error);
-        this.addLog(`停止训练失败：${error.message}`, 'error');
+        console.error('停止训练异常:', error);
+        // 即使出错也强制更新状态
+        this.isTraining = false;
+        this.isBaking = false;
+        this.bakingStatus = 'error';
+        this.addLog(`停止操作完成（可能未完全停止）`, 'warning');
       }
     },
     
@@ -836,6 +1127,12 @@ export default {
           
           if (model === 'modelPath') {
             this.modelPath = selectedPath;
+            // 自动更新检查点路径为输出目录下的 chkpnt30000.pth
+            const checkpointName = selectedPath.endsWith('/') || selectedPath.endsWith('\\') 
+              ? 'chkpnt30000.pth' 
+              : (selectedPath.includes('\\') ? '\\chkpnt30000.pth' : '/chkpnt30000.pth');
+            this.checkpoint = selectedPath + checkpointName;
+            this.addLog(`输出路径已设置，检查点路径自动更新为：${this.checkpoint}`, 'info');
           } else if (model === 'sourcePath') {
             this.sourcePath = selectedPath;
             // 自动检查数据集格式
@@ -1108,12 +1405,10 @@ export default {
 }
 
 .control-buttons {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
+  display: flex;
   gap: 0.5rem;
 }
 
-.pause-btn,
 .stop-btn {
   padding: 0.625rem;
   border-radius: 0.5rem;
@@ -1122,18 +1417,6 @@ export default {
   border: none;
   cursor: pointer;
   transition: all 0.2s;
-}
-
-.pause-btn {
-  background-color: #fef3c7;
-  color: #92400e;
-}
-
-.pause-btn:hover:not(:disabled) {
-  background-color: #fde68a;
-}
-
-.stop-btn {
   background-color: #fee2e2;
   color: #991b1b;
 }
@@ -1460,5 +1743,266 @@ export default {
   padding: 0.5rem 0.75rem;
   font-size: 0.875rem;
   cursor: pointer;
+}
+
+.help-text {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  margin-top: 0.375rem;
+  font-size: 0.75rem;
+  color: #64748b;
+}
+
+/* 数据集转换等待动画弹窗 */
+.conversion-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  backdrop-filter: blur(4px);
+}
+
+.conversion-modal {
+  background: white;
+  border-radius: 1rem;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+  width: 90%;
+  max-width: 800px;
+  max-height: 80vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  animation: modalSlideIn 0.3s ease-out;
+}
+
+@keyframes modalSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-20px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.modal-header {
+  padding: 1.5rem;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.modal-title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0;
+}
+
+.modal-body {
+  padding: 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  overflow-y: auto;
+}
+
+/* 加载动画 */
+.loading-animation {
+  position: relative;
+  width: 80px;
+  height: 80px;
+  margin: 0 auto;
+}
+
+.spinner-ring {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  border: 3px solid transparent;
+  border-top-color: #667eea;
+  border-radius: 50%;
+  animation: spin 1.2s cubic-bezier(0.5, 0, 0.5, 1) infinite;
+}
+
+.spinner-ring:nth-child(1) {
+  animation-delay: -0.45s;
+  border-top-color: #667eea;
+}
+
+.spinner-ring:nth-child(2) {
+  width: 70%;
+  height: 70%;
+  top: 15%;
+  left: 15%;
+  animation-delay: -0.3s;
+  border-top-color: #764ba2;
+}
+
+.spinner-ring:nth-child(3) {
+  width: 40%;
+  height: 40%;
+  top: 30%;
+  left: 30%;
+  animation-delay: -0.15s;
+  border-top-color: #f59e0b;
+}
+
+@keyframes spin {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+/* 进度提示 */
+.progress-info {
+  text-align: center;
+}
+
+.loading-text {
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: #1e293b;
+  margin-bottom: 0.5rem;
+}
+
+.loading-subtext {
+  font-size: 0.875rem;
+  color: #64748b;
+  margin: 0;
+}
+
+/* 转换日志 */
+.conversion-log-container {
+  background: #f8fafc;
+  border-radius: 0.75rem;
+  border: 1px solid #e2e8f0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  max-height: 300px;
+}
+
+.log-header {
+  padding: 0.75rem 1rem;
+  background: #f1f5f9;
+  border-bottom: 1px solid #e2e8f0;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #475569;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.log-output {
+  flex: 1;
+  max-height: 250px;
+  overflow-y: auto;
+  padding: 1rem;
+  font-family: 'Courier New', monospace;
+  font-size: 0.75rem;
+  line-height: 1.6;
+}
+
+.log-output .log-line {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.375rem;
+  padding: 0.375rem;
+  border-radius: 0.25rem;
+}
+
+.log-output .log-line.info {
+  background-color: transparent;
+  color: #334155;
+}
+
+.log-output .log-line.error {
+  background-color: #fee2e2;
+  color: #991b1b;
+}
+
+.log-output .log-line.success {
+  background-color: #dcfce7;
+  color: #166534;
+}
+
+.log-output .log-line.warning {
+  background-color: #fef3c7;
+  color: #92400e;
+}
+
+.log-output .log-time {
+  color: #94a3b8;
+  font-size: 0.625rem;
+  white-space: nowrap;
+}
+
+.log-output .log-message {
+  flex: 1;
+  word-break: break-all;
+}
+
+.modal-footer {
+  padding: 1rem 1.5rem;
+  background: #f8fafc;
+  border-top: 1px solid #e2e8f0;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.cancel-btn {
+  padding: 0.625rem 1.25rem;
+  background-color: #ef4444;
+  color: white;
+  border: none;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.cancel-btn:hover:not(:disabled) {
+  background-color: #dc2626;
+}
+
+.cancel-btn:disabled {
+  background-color: #fca5a5;
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+/* 旋转图标动画 */
+.spin-icon {
+  animation: spinIcon 2s linear infinite;
+}
+
+@keyframes spinIcon {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 </style>
