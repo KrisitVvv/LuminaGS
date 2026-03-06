@@ -60,7 +60,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   onBakingOutput: (callback) => {
     ipcRenderer.on('baking-output', (event, data) => callback(data));
-  }
+  },
+  // 项目管理相关 API
+  getProjectList: () => ipcRenderer.invoke('get-project-list'),
+  getProjectDetail: (projectId) => ipcRenderer.invoke('get-project-detail', projectId),
+  getQueueStatus: () => ipcRenderer.invoke('get-queue-status'),
+  onTrainingQueueUpdate: (callback) => {
+    ipcRenderer.on('training-queue-update', (event, data) => callback(data));
+  },
+  // 更新项目配置（实时自动保存）
+  updateProjectConfig: (projectId, config) => ipcRenderer.invoke('update-project-config', { projectId, config })
 });
 
 // 监听窗口状态变化

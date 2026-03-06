@@ -4,6 +4,7 @@ const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs').promises;
 const PythonEnvironmentManager = require('./pythonEnvironment');
+const ProjectManager = require('./projectManager');
 
 Menu.setApplicationMenu(null);
 let mainWindow = null;
@@ -14,6 +15,9 @@ const envManager = new PythonEnvironmentManager();
 
 // 将 mainWindow 暴露给全局，供环境管理模块使用
 global.mainWindow = null;
+
+// 初始化项目管理器
+const projectManager = new ProjectManager();
 
 const createWindow = () => {
   mainWindow = new BrowserWindow({
@@ -159,7 +163,7 @@ ipcMain.handle('select-file', async (event, options = {}) => {
   }
 });
 
-// 存储当前选中的GPU索引
+// 存储当前选中的 GPU 索引
 let currentSelectedGpuIndex = -1;
 
 // 存储当前训练进程
@@ -167,6 +171,50 @@ let trainingProcess = null;
 let bakingProcess = null;
 let conversionProcess = null;
 let conversionCancelled = false; // 标记转换是否被用户取消
+
+// 当前正在训练的项目 ID
+let currentTrainingProjectId = null;
+
+// 训练任务队列管理
+const trainingQueue = [];
+let isTrainingActive = false; // 标记是否有训练正在进行
+
+// 从队列中启动下一个训练任务
+async function startNextTrainingTask() {
+  if (trainingQueue.length === 0 || isTrainingActive) {
+    return;
+  }
+  
+  isTrainingActive = true;
+  const nextTask = trainingQueue.shift(); // 获取第一个任务
+  
+  try {
+    console.log('[Queue] 启动队列中的下一个任务:', nextTask.projectName);
+    
+    // 更新项目状态为训练中
+    if (nextTask.projectId) {
+      await projectManager.updateProjectStatus(nextTask.projectId, 'training');
+      currentTrainingProjectId = nextTask.projectId;
+    }
+    
+    // 通知前端任务开始
+    mainWindow.webContents.send('training-queue-update', {
+      type: 'task-started',
+      projectId: nextTask.projectId,
+      projectName: nextTask.projectName
+    });
+    
+    // 执行实际的训练启动逻辑（直接在这里调用原逻辑）
+    await startTrainingProcess(nextTask.config, nextTask.projectId);
+  } catch (error) {
+    console.error('[Queue] 启动队列任务失败:', error);
+    if (nextTask.projectId) {
+      await projectManager.updateProjectStatus(nextTask.projectId, 'error');
+    }
+    isTrainingActive = false;
+    startNextTrainingTask(); // 尝试启动下一个
+  }
+}
 
 // 设置选中 GPU 索引
 ipcMain.handle('set-selected-gpu-index', async (event, index) => {
@@ -184,8 +232,82 @@ ipcMain.handle('start-training', async (event, config) => {
       throw new Error(`Python 环境未就绪：${validation.error}`);
     }
     
-    const { modelPath, sourcePath, iterations, eval: evalMode, gamma, indirect, checkpoint, resolution, imageSubdir } = config;
+    const { 
+      modelPath, 
+      sourcePath, 
+      iterations, 
+      eval: evalMode, 
+      gamma, 
+      indirect, 
+      checkpoint, 
+      resolution, 
+      imageSubdir,
+      projectName // 新增：项目名称
+    } = config;
     
+    // 创建项目（如果提供了项目名称）
+    let projectId = null;
+    let projectConfigFile = null;
+    if (projectName) {
+      console.log('[Training] 创建项目:', projectName);
+      const projectResult = await projectManager.createProject({
+        projectName,
+        outputPath: modelPath,
+        sourcePath,
+        stage: checkpoint ? 'stage2' : 'stage1',
+        totalIterations: iterations,
+        resolution,
+        evalMode,
+        gamma,
+        indirect,
+        bound: config.bound || 1.5,
+        occluRes: config.occluRes || 128,
+        occlusion: config.occlusion || 0.01,
+        checkpoint  // 新增：传递 checkpoint 参数
+      });
+      
+      if (projectResult.success) {
+        projectId = projectResult.projectId;
+        projectConfigFile = projectResult.configFile;
+        currentTrainingProjectId = projectId;
+        console.log('[Training] 项目创建成功:', projectId);
+      } else {
+        console.warn('[Training] 项目创建失败，继续训练:', projectResult.error);
+      }
+    }
+    
+    // 实现队列逻辑：如果有训练正在进行，将任务加入队列
+    if (isTrainingActive && trainingProcess) {
+      console.log('[Queue] 训练正在进行中，将任务加入队列');
+      
+      // 将任务加入队列
+      trainingQueue.push({
+        config,
+        projectId,
+        projectName: projectName || '未命名'
+      });
+      
+      // 更新项目状态为等待中
+      if (projectId) {
+        await projectManager.updateProjectStatus(projectId, 'waiting');
+      }
+      
+      // 通知前端任务已进入队列
+      mainWindow.webContents.send('training-queue-update', {
+        type: 'task-queued',
+        projectId,
+        projectName: projectName || '未命名',
+        queueLength: trainingQueue.length
+      });
+      
+      return { 
+        success: true, 
+        queued: true, 
+        message: '训练已加入队列，等待前一个任务完成',
+        queuePosition: trainingQueue.length
+      };
+    }
+        
     // 检查输出目录是否为空
     try {
       const dirExists = await fs.access(modelPath).then(() => true).catch(() => false);
@@ -372,6 +494,9 @@ ipcMain.handle('start-training', async (event, config) => {
     
     console.log('启动训练进程:', envManager.pythonPath, args.join(' '));
     
+    // 标记训练已激活
+    isTrainingActive = true;
+    
     // 使用环境管理器运行 Python 脚本
     trainingProcess = envManager.runPythonScript(
       path.join(__dirname, '../../GS-IR/train.py'),
@@ -383,6 +508,111 @@ ipcMain.handle('start-training', async (event, config) => {
       const output = data.toString();
       console.log('训练输出:', output);
       mainWindow.webContents.send('training-output', { type: 'stdout', data: output });
+      
+      // 解析 TRAINING_STATE_UPDATE 消息并更新项目状态
+      if (projectId && output.includes('TRAINING_STATE_UPDATE:')) {
+        try {
+          const jsonMatch = output.match(/TRAINING_STATE_UPDATE:\s*(\{.+\})/);
+          if (jsonMatch) {
+            const stateData = JSON.parse(jsonMatch[1]);
+            console.log('[Training] 解析到状态更新:', stateData);
+            
+            // 更新项目状态（注意：每 100 次迭代时 psnr/ssim 为 null）
+            projectManager.updateProject(projectId, {
+              currentIteration: stateData.iter,
+              loss: stateData.loss,
+              psnr: stateData.psnr,
+              ssim: stateData.ssim,
+              previewPath: stateData.preview,
+              status: 'training'
+            }).then(result => {
+              if (result.success) {
+                console.log('[Training] 项目状态已更新');
+              } else {
+                console.warn('[Training] 项目状态更新失败:', result.error);
+              }
+            });
+          }
+        } catch (error) {
+          console.error('[Training] 解析 TRAINING_STATE_UPDATE 失败:', error);
+        }
+      }
+      
+      // ⚠️ 解析评估数据（每 1000 次迭代）
+      // 注意：Python 会输出 test 和 train 两次评估，我们只解析一次
+      if (projectId) {
+        // 尝试匹配 test 或 train 的评估行
+        const evalTestMatch = output.match(/\[ITER\s+(\d+)\]\s+Evaluating\s+test:\s+L1\s+([\d.]+)\s+PSNR:\s*([\d.]+)\s+SSIM\s+([\d.]+)/);
+        const evalTrainMatch = output.match(/\[ITER\s+(\d+)\]\s+Evaluating\s+train:\s+L1\s+([\d.]+)\s+PSNR:\s*([\d.]+)\s+SSIM\s+([\d.]+)/);
+        
+        // 解析 EVAL_TEST_* 和 EVAL_TRAIN_* 指标
+        const evalTestL1Match = output.match(/EVAL_TEST_L1:\s*([\d.]+)/);
+        const evalTestPsnrMatch = output.match(/EVAL_TEST_PSNR:\s*([\d.]+)/);
+        const evalTestSsimMatch = output.match(/EVAL_TEST_SSIM:\s*([\d.]+)/);
+        
+        const evalTrainL1Match = output.match(/EVAL_TRAIN_L1:\s*([\d.]+)/);
+        const evalTrainPsnrMatch = output.match(/EVAL_TRAIN_PSNR:\s*([\d.]+)/);
+        const evalTrainSsimMatch = output.match(/EVAL_TRAIN_SSIM:\s*([\d.]+)/);
+        
+        // ⚠️ 优先使用 train 评估（更准确），如果没有则使用 test 评估
+        const evalMatch = evalTrainMatch || evalTestMatch;
+        const evalType = evalTrainMatch ? 'train' : (evalTestMatch ? 'test' : null);
+        
+        if (evalMatch || evalTrainL1Match || evalTestL1Match) {
+          const iter = evalMatch ? parseInt(evalMatch[1]) : null;
+          const l1 = evalMatch ? parseFloat(evalMatch[2]) : null;
+          const psnr = evalMatch ? parseFloat(evalMatch[3]) : null;
+          const ssim = evalMatch ? parseFloat(evalMatch[4]) : null;
+          
+          // 从 EVAL_*_L1 等提取评估 L1（独立指标）
+          const evalL1 = evalTrainL1Match ? parseFloat(evalTrainL1Match[1]) : 
+                        (evalTestL1Match ? parseFloat(evalTestL1Match[1]) : null);
+          const evalPsnr = evalTrainPsnrMatch ? parseFloat(evalTrainPsnrMatch[1]) :
+                          (evalTestPsnrMatch ? parseFloat(evalTestPsnrMatch[1]) : null);
+          const evalSsim = evalTrainSsimMatch ? parseFloat(evalTrainSsimMatch[1]) :
+                          (evalTestSsimMatch ? parseFloat(evalTestSsimMatch[1]) : null);
+          
+          // ⚠️ 只在第一次解析到时处理（避免重复）
+          if (iter !== null && l1 !== null) {
+            console.log(`[Training] ✓ 解析到${evalType ? evalType.toUpperCase() : ''}评估数据 - iter: ${iter}, L1: ${l1}, PSNR: ${psnr}, SSIM: ${ssim}`);
+            
+            // 更新项目状态，包含 PSNR、SSIM 和评估 L1
+            // ⚠️ 注意：loss 字段应该已经在 TRAINING_STATE_UPDATE 中设置过了
+            // 这里只更新 PSNR、SSIM 和 Eval L1
+            const projectUpdateData = {
+              currentIteration: iter,
+              psnr: psnr,
+              ssim: ssim,
+              evalL1: evalL1,  // 评估 L1（单独保存）
+              evalL1Type: evalType,  // 'test' 或 'train'
+              status: 'training'
+              // ✅ 注意：不包含 loss 字段，避免覆盖常规训练的 Loss
+            };
+            
+            projectManager.updateProject(projectId, projectUpdateData).then(result => {
+              if (result.success) {
+                console.log('[Training] ✓ 评估数据已保存');
+                
+                // 同时发送一个补充的 TRAINING_STATE_UPDATE 给前端
+                // ⚠️ 注意：使用闭包中的变量 evalL1 和 l1Type
+                mainWindow.webContents.send('training-output', {
+                  type: 'eval-update',
+                  data: {
+                    iter,
+                    loss: null,  // ✅ 明确设置为 null，不使用评估 L1
+                    psnr,
+                    ssim,
+                    evalL1: evalL1,  // 评估 L1
+                    evalL1Type: evalType
+                  }
+                });
+              } else {
+                console.warn('[Training] 评估数据保存失败:', result.error);
+              }
+            });
+          }
+        }
+      }
     });
     
     trainingProcess.stderr.on('data', (data) => {
@@ -395,6 +625,29 @@ ipcMain.handle('start-training', async (event, config) => {
       console.log(`训练进程退出，代码：${code}`);
       mainWindow.webContents.send('training-output', { type: 'close', code });
       trainingProcess = null;
+      
+      // 更新项目状态为完成
+      if (projectId) {
+        const finalStatus = code === 0 ? 'completed' : 'error';
+        projectManager.updateProject(projectId, {
+          status: finalStatus
+        }).then(() => {
+          console.log(`[Training] 项目状态已更新为：${finalStatus}`);
+          currentTrainingProjectId = null;
+          isTrainingActive = false;
+          
+          // 启动队列中的下一个任务
+          console.log('[Queue] 当前训练结束，检查队列...');
+          startNextTrainingTask();
+        }).catch(err => {
+          console.error('[Training] 更新项目状态失败:', err);
+          isTrainingActive = false;
+          startNextTrainingTask();
+        });
+      } else {
+        isTrainingActive = false;
+        startNextTrainingTask();
+      }
     });
     
     return { success: true };
@@ -766,6 +1019,35 @@ ipcMain.handle('get-latest-rendered-image', async (event, modelPath) => {
     return { success: false, error: '未找到渲染图像' };
   } catch (error) {
     console.error('获取最新渲染图像失败:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// 更新项目配置（实时自动保存）
+ipcMain.handle('update-project-config', async (event, configData) => {
+  try {
+    const { projectId, config } = configData;
+    
+    // 验证必填字段
+    if (!projectId) {
+      return { success: false, error: '缺少 projectId' };
+    }
+    
+    // 调用 ProjectManager 更新配置
+    const result = await projectManager.updateProjectConfig(projectId, config);
+    
+    if (result.success) {
+      console.log(`[IPC] 项目配置已更新：${projectId}`);
+      // 通知所有窗口配置已更新
+      mainWindow?.webContents.send('project-config-updated', {
+        projectId,
+        config
+      });
+    }
+    
+    return result;
+  } catch (error) {
+    console.error('[IPC] 更新项目配置失败:', error);
     return { success: false, error: error.message };
   }
 });
@@ -1614,3 +1896,50 @@ app.on(
     callback(true);
   }
 );
+
+// ==================== 项目管理相关 IPC ====================
+
+// 获取所有项目列表
+ipcMain.handle('get-project-list', async () => {
+  try {
+    const projects = projectManager.getAllProjects();
+    // 扫描并更新项目状态
+    await projectManager.scanProjects();
+    return { success: true, data: projects };
+  } catch (error) {
+    console.error('[IPC] 获取项目列表失败:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// 获取单个项目详情
+ipcMain.handle('get-project-detail', async (event, projectId) => {
+  try {
+    const result = await projectManager.loadProject(projectId);
+    return result;
+  } catch (error) {
+    console.error('[IPC] 获取项目详情失败:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// 获取队列状态
+ipcMain.handle('get-queue-status', async () => {
+  try {
+    return {
+      success: true,
+      data: {
+        isTrainingActive,
+        queueLength: trainingQueue.length,
+        currentProjectId: currentTrainingProjectId,
+        queuedProjects: trainingQueue.map(task => ({
+          projectId: task.projectId,
+          projectName: task.projectName
+        }))
+      }
+    };
+  } catch (error) {
+    console.error('[IPC] 获取队列状态失败:', error);
+    return { success: false, error: error.message };
+  }
+});

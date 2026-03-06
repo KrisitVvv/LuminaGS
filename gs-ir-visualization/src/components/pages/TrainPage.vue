@@ -5,10 +5,21 @@
       <div class="params-panel">
         <h3 class="panel-title">训练参数</h3>
         <div class="params-form">
+          <!-- 项目名称输入框 -->
+          <div class="form-group">
+            <label class="form-label">项目名称</label>
+            <input 
+              class="text-input" 
+              v-model="projectName" 
+              placeholder="留空则自动生成（如 project_20250405_1430）"
+              @blur="sanitizeProjectName; triggerAutoSave()"
+            >
+          </div>
+          
           <div class="form-group">
             <label class="form-label">输出路径 (-m)</label>
             <div class="input-group">
-              <input class="path-input" v-model="modelPath" placeholder="outputs/lego/">
+              <input class="path-input" v-model="modelPath" placeholder="outputs/lego/" @blur="triggerAutoSave()">
               <button class="browse-btn" @click="selectFolder('modelPath')"><span class="iconify" data-icon="solar:folder-linear"></span></button>
             </div>
           </div>
@@ -16,20 +27,20 @@
           <div class="form-group">
             <label class="form-label">数据集路径 (-s)</label>
             <div class="input-group">
-              <input class="path-input" v-model="sourcePath" placeholder="datasets/TensoIR/lego/">
+              <input class="path-input" v-model="sourcePath" placeholder="datasets/TensoIR/lego/" @blur="triggerAutoSave()">
               <button class="browse-btn" @click="selectFolder('sourcePath')"><span class="iconify" data-icon="solar:folder-linear"></span></button>
             </div>
           </div>
           
           <div class="form-group">
             <label class="form-label">训练轮次 (Iterations)</label>
-            <input class="number-input" type="number" v-model.number="iterations">
+            <input class="number-input" type="number" v-model.number="iterations" @change="triggerAutoSave()">
           </div>
           
           <div class="form-group">
             <label class="form-label">Baking 检查点</label>
             <div class="input-group">
-              <input class="path-input" v-model="checkpoint" placeholder="outputs/lego/chkpnt30000.pth">
+              <input class="path-input" v-model="checkpoint" placeholder="outputs/lego/chkpnt30000.pth" @blur="triggerAutoSave()">
               <button class="browse-btn" @click="selectFile('checkpoint')"><span class="iconify" data-icon="solar:file-linear"></span></button>
             </div>
           </div>
@@ -38,13 +49,13 @@
             <h4 class="section-title">Stage1 参数</h4>
             <div class="checkbox-group">
               <label class="checkbox-label">
-                <input type="checkbox" v-model="evalMode">
+                <input type="checkbox" v-model="evalMode" @change="triggerAutoSave()">
                 <span>评估模式 (--eval)</span>
               </label>
             </div>
             <div class="form-group" style="margin-top: 0.75rem;">
               <label class="form-label">分辨率压缩 (-r)</label>
-              <select class="select-input" v-model.number="resolution" @change="handleResolutionChange">
+              <select class="select-input" v-model.number="resolution" @change="handleResolutionChange; triggerAutoSave()">
                 <option :value="1">原始分辨率 (1/1)</option>
                 <option :value="2">1/2 分辨率</option>
                 <option :value="4">1/4 分辨率</option>
@@ -62,15 +73,15 @@
             <h4 class="section-title">Baking 参数</h4>
             <div class="form-group">
               <label class="form-label">Bound</label>
-              <input class="number-input" type="number" step="0.1" v-model.number="bound">
+              <input class="number-input" type="number" step="0.1" v-model.number="bound" @change="triggerAutoSave()">
             </div>
             <div class="form-group">
               <label class="form-label">Occlusion Resolution</label>
-              <input class="number-input" type="number" v-model.number="occluRes">
+              <input class="number-input" type="number" v-model.number="occluRes" @change="triggerAutoSave()">
             </div>
             <div class="form-group">
               <label class="form-label">Occlusion Threshold</label>
-              <input class="number-input" type="number" step="0.01" v-model.number="occlusion">
+              <input class="number-input" type="number" step="0.01" v-model.number="occlusion" @change="triggerAutoSave()">
             </div>
           </div>
           
@@ -78,11 +89,11 @@
             <h4 class="section-title">Stage2 参数</h4>
             <div class="checkbox-group">
               <label class="checkbox-label">
-                <input type="checkbox" v-model="gamma">
+                <input type="checkbox" v-model="gamma" @change="triggerAutoSave()">
                 <span>Gamma 校正 (--gamma)</span>
               </label>
               <label class="checkbox-label">
-                <input type="checkbox" v-model="indirect">
+                <input type="checkbox" v-model="indirect" @change="triggerAutoSave()">
                 <span>间接光照 (--indirect)</span>
               </label>
             </div>
@@ -156,10 +167,20 @@
               <h4 class="chart-title">结构相似性 (SSIM)</h4>
               <div ref="ssimChart" class="chart-container"></div>
             </div>
+            <div class="chart-card">
+              <h4 class="chart-title">评估 L1 (Eval L1)</h4>
+              <div ref="evalL1Chart" class="chart-container"></div>
+            </div>
           </div>
           
           <div class="preview-card">
-            <h4 class="preview-title">动态迭代预览</h4>
+            <div class="preview-header">
+              <h4 class="preview-title">动态迭代预览</h4>
+              <button class="refresh-preview-btn" @click="updatePreviewImage" :disabled="!modelPath">
+                <span class="iconify" data-icon="solar:refresh-linear"></span>
+                刷新预览
+              </button>
+            </div>
             <div class="preview-container">
               <img v-if="previewImage" class="preview-image" :src="previewImage" alt="Training Preview">
               <div v-else class="preview-placeholder">等待训练数据...</div>
@@ -264,6 +285,7 @@ export default {
   data() {
     return {
       // 训练参数
+      projectName: '', // 项目名称
       modelPath: 'outputs/lego/',
       sourcePath: 'datasets/TensoIR/lego/',
       iterations: 30000,
@@ -285,11 +307,16 @@ export default {
       lossChartInstance: null,
       psnrChartInstance: null,
       ssimChartInstance: null,
+      evalL1ChartInstance: null,  // 新增：Eval L1 图表实例
+      
+      // 响应式布局观察器
+      resizeObserver: null,
       
       // 图表数据
       lossData: [],
       psnrData: [],
       ssimData: [],
+      evalL1Data: [],  // 新增：Eval L1 数据
       
       // 日志
       logs: [],
@@ -317,6 +344,12 @@ export default {
       
       // 图片子目录选择
       imageSubdir: 'images', // 默认值
+      
+      // 当前项目 ID（用于自动保存）
+      currentProjectId: null,
+      
+      // 防抖定时器
+      saveDebounceTimer: null
     }
   },
   computed: {
@@ -336,7 +369,7 @@ export default {
       return statusMap[this.bakingStatus] || '未知';
     }
   },
-  mounted() {
+  async mounted() {
     this.initCharts();
     this.setupIPCListeners();
     window.addEventListener('resize', this.handleResize);
@@ -344,6 +377,37 @@ export default {
     // 监听 Electron 窗口状态变化事件
     window.addEventListener('window-maximized', this.handleWindowMaximized);
     window.addEventListener('window-restored', this.handleWindowRestored);
+    
+    // 使用 ResizeObserver 监听图表容器尺寸变化（基于窗体大小）
+    this.setupResizeObserver();
+    
+    // 检查是否有 resumeProjectId 参数，有则加载项目配置
+    if (this.$route.query.resumeProjectId) {
+      await this.loadProjectFromRoute();
+    }
+    
+    // 检查是否有初始预览图（从 ProgressPage 传递过来）
+    if (this.$route.query.initialPreviewImage) {
+      console.log('[初始预览] 收到来自 ProgressPage 的预览图');
+      console.log('[初始预览] Base64 长度:', this.$route.query.initialPreviewImage.length);
+      console.log('[初始预览] Base64 前缀:', this.$route.query.initialPreviewImage.substring(0, 22));
+      
+      // 使用 Image 对象预加载，确保图片可以正常显示
+      const img = new Image();
+      img.onload = () => {
+        console.log('[初始预览] ✓ 图片预加载成功，更新到界面');
+        this.previewImage = this.$route.query.initialPreviewImage;
+      };
+      img.onerror = (err) => {
+        console.error('[初始预览] ✗ 图片预加载失败:', err);
+        // 即使失败也尝试直接赋值
+        this.previewImage = this.$route.query.initialPreviewImage;
+      };
+      img.src = this.$route.query.initialPreviewImage;
+      
+      // 清理 URL 参数，避免重复使用
+      this.$router.replace({ query: { ...this.$route.query, initialPreviewImage: undefined } });
+    }
   },
   beforeUnmount() {
     if (this.lossChartInstance) {
@@ -355,9 +419,17 @@ export default {
     if (this.ssimChartInstance) {
       this.ssimChartInstance.dispose();
     }
+    if (this.evalL1ChartInstance) {
+      this.evalL1ChartInstance.dispose();
+    }
     window.removeEventListener('resize', this.handleResize);
     window.removeEventListener('window-maximized', this.handleWindowMaximized);
     window.removeEventListener('window-restored', this.handleWindowRestored);
+    
+    // 清理 ResizeObserver
+    if (this.resizeObserver) {
+      this.resizeObserver.disconnect();
+    }
   },
   methods: {
     async handleResolutionChange() {
@@ -418,6 +490,25 @@ export default {
       }
     },
     
+    // 清理项目名称（去除特殊字符和空格）
+    sanitizeProjectName() {
+      if (this.projectName) {
+        // 只保留字母、数字、中文和下划线
+        this.projectName = this.projectName.replace(/[^a-zA-Z0-9\u4e00-\u9fa5_]/g, '_');
+      }
+    },
+    
+    // 生成默认项目名称（时间戳格式）
+    generateDefaultProjectName() {
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = String(now.getMonth() + 1).padStart(2, '0');
+      const day = String(now.getDate()).padStart(2, '0');
+      const hours = String(now.getHours()).padStart(2, '0');
+      const minutes = String(now.getMinutes()).padStart(2, '0');
+      return `project_${year}${month}${day}_${hours}${minutes}`;
+    },
+    
     // 检查数据集目录下的子目录是否存在
     async checkDirectoryExists(subdirName) {
       try {
@@ -435,6 +526,331 @@ export default {
       }
     },
     
+    // 从路由参数加载项目配置
+    async loadProjectFromRoute() {
+      const projectId = this.$route.query.resumeProjectId;
+      if (!projectId) {
+        console.warn('[加载项目] 未找到 projectId 参数');
+        return;
+      }
+      
+      // 设置当前项目 ID（用于后续自动保存）
+      this.currentProjectId = projectId;
+      console.log('[加载项目] 设置 currentProjectId:', projectId);
+      
+      console.log('[加载项目] 准备加载项目:', projectId);
+      
+      try {
+        // 调用 Electron API 获取项目详情
+        const result = await window.electronAPI?.getProjectDetail(projectId);
+        
+        if (!result?.success || !result?.data) {
+          throw new Error(result?.error || '加载项目失败');
+        }
+        
+        const project = result.data;
+        console.log('[加载项目] 成功获取项目配置:', project);
+        
+        // 填充表单字段
+        this.projectName = project.name || '';
+        this.modelPath = project.outputPath || '';
+        this.sourcePath = project.sourcePath || '';
+        this.iterations = project.config?.iterations || 30000;
+        this.evalMode = project.config?.eval || true;
+        this.resolution = project.config?.resolution || 1;
+        this.gamma = project.config?.gamma || false;
+        this.indirect = project.config?.indirect || false;
+        this.bound = project.config?.bound || 1.5;
+        this.occluRes = project.config?.occluRes || 128;
+        this.occlusion = project.config?.occlusion || 0.8;
+        
+        // 恢复检查点路径（如果有）
+        if (project.checkpoint) {
+          // 优先使用保存的 checkpoint 路径
+          this.checkpoint = project.checkpoint;
+          console.log('[加载项目] 恢复 checkpoint 路径:', this.checkpoint);
+        } else if (project.stage === 'stage2' || project.stage === 'baking') {
+          // 如果没有保存 checkpoint，则从 outputPath 推导
+          const lastSlashIndex = project.outputPath.lastIndexOf('/');
+          if (lastSlashIndex !== -1) {
+            const baseDir = project.outputPath.substring(0, lastSlashIndex);
+            this.checkpoint = `${baseDir}/chkpnt${project.currentIteration || 30000}.pth`;
+            console.log('[加载项目] 从 outputPath 推导 checkpoint 路径:', this.checkpoint);
+          }
+        }
+        
+        // 恢复图表数据
+        if (project.metrics) {
+          this.lossData = project.metrics.lossHistory || [];
+          this.psnrData = project.metrics.psnrHistory || [];
+          this.ssimData = project.metrics.ssimHistory || [];
+          this.evalL1Data = project.metrics.evalL1History || [];  // 新增：Eval L1 数据
+          
+          console.log('[加载项目] 恢复图表数据:', {
+            loss: this.lossData.length,
+            psnr: this.psnrData.length,
+            ssim: this.ssimData.length,
+            evalL1: this.evalL1Data.length
+          });
+          
+          // 延迟到下一个 tick 确保图表实例已初始化
+          this.$nextTick(() => {
+            this.updateLossChart();
+            this.updatePsnrChart();
+            this.updateSsimChart();
+            this.updateEvalL1Chart();  // 新增：更新 Eval L1 图表
+          });
+        }
+        
+        // 恢复当前迭代次数
+        this.currentIteration = project.currentIteration || 0;
+        
+        // 根据阶段设置状态
+        if (project.status === 'training') {
+          this.isTraining = true;
+          this.addLog(`已恢复项目：${project.name}`, 'success');
+          this.addLog(`继续训练 - 当前迭代：${this.currentIteration}`, 'info');
+        } else if (project.status === 'waiting') {
+          this.addLog(`项目已在队列中等待：${project.name}`, 'info');
+        } else if (project.status === 'completed') {
+          this.addLog(`项目已完成：${project.name}`, 'success');
+        } else if (project.status === 'error') {
+          this.addLog(`项目发生错误：${project.name}`, 'error');
+        }
+        
+        // 刷新分辨率选择
+        await this.handleResolutionChange();
+        
+        // 加载最新渲染预览图（如果有）
+        console.log('[加载项目] 准备加载最新渲染预览图...');
+        await this.updatePreviewImage();
+        
+        console.log('[加载项目] ✓ 项目配置加载完成');
+        
+      } catch (error) {
+        console.error('[加载项目] 失败:', error);
+        this.addLog(`加载项目失败：${error.message}`, 'error');
+        alert(`恢复项目失败：${error.message}`);
+      }
+    },
+    
+    // 更新 Loss 图表（支持批量数据）
+    updateLossChart() {
+      if (!this.lossChartInstance) {
+        console.warn('Loss 图表实例未初始化');
+        return;
+      }
+      
+      try {
+        console.log('[更新 Loss 图表] 原始数据数量:', this.lossData.length);
+        
+        // 支持两种数据格式
+        const xData = this.lossData.map(item => {
+          // 新格式：{ iteration, value } 或旧格式：{ iter, loss }
+          return (item.iteration || item.iter || 0).toString();
+        });
+        
+        const seriesData = this.lossData.map(item => {
+          // 新格式：{ iteration, value }
+          if (item.value !== undefined && item.value !== null) {
+            return parseFloat(item.value);
+          }
+          // 旧格式：{ iter, loss }
+          if (item.loss !== undefined && item.loss !== null) {
+            return parseFloat(item.loss);
+          }
+          return null;
+        }).filter(v => v !== null); // 过滤掉 null 值
+        
+        console.log('[更新 Loss 图表] 有效数据数量:', seriesData.length);
+        
+        this.lossChartInstance.setOption({
+          xAxis: { data: xData },
+          series: [{ data: seriesData }]
+        });
+      } catch (error) {
+        console.error('更新 Loss 图表失败:', error);
+      }
+    },
+    
+    // 更新 PSNR 图表（支持批量数据）
+    updatePsnrChart() {
+      if (!this.psnrChartInstance) {
+        console.warn('PSNR 图表实例未初始化');
+        return;
+      }
+      
+      try {
+        console.log('[更新 PSNR 图表] 原始数据数量:', this.psnrData.length);
+        
+        // 支持两种数据格式
+        const xData = this.psnrData.map(item => {
+          // 新格式：{ iteration, value } 或旧格式：{ iter, psnr }
+          return (item.iteration || item.iter || 0).toString();
+        });
+        
+        const seriesData = this.psnrData.map(item => {
+          // 新格式：{ iteration, value }
+          if (item.value !== undefined && item.value !== null) {
+            return parseFloat(item.value);
+          }
+          // 旧格式：{ iter, psnr }
+          if (item.psnr !== undefined && item.psnr !== null) {
+            return parseFloat(item.psnr);
+          }
+          return null;
+        }).filter(v => v !== null); // 过滤掉 null 值
+        
+        console.log('[更新 PSNR 图表] 有效数据数量:', seriesData.length);
+        
+        this.psnrChartInstance.setOption({
+          xAxis: { data: xData },
+          series: [{ data: seriesData }]
+        });
+      } catch (error) {
+        console.error('更新 PSNR 图表失败:', error);
+      }
+    },
+    
+    // 更新 SSIM 图表（支持批量数据）
+    updateSsimChart() {
+      if (!this.ssimChartInstance) {
+        console.warn('SSIM 图表实例未初始化');
+        return;
+      }
+      
+      try {
+        console.log('[更新 SSIM 图表] 原始数据数量:', this.ssimData.length);
+        
+        // 支持两种数据格式
+        const xData = this.ssimData.map(item => {
+          // 新格式：{ iteration, value } 或旧格式：{ iter, ssim }
+          return (item.iteration || item.iter || 0).toString();
+        });
+        
+        const seriesData = this.ssimData.map(item => {
+          // 新格式：{ iteration, value }
+          if (item.value !== undefined && item.value !== null) {
+            return parseFloat(item.value);
+          }
+          // 旧格式：{ iter, ssim }
+          if (item.ssim !== undefined && item.ssim !== null) {
+            return parseFloat(item.ssim);
+          }
+          return null;
+        }).filter(v => v !== null); // 过滤掉 null 值
+        
+        console.log('[更新 SSIM 图表] 有效数据数量:', seriesData.length);
+        
+        this.ssimChartInstance.setOption({
+          xAxis: { data: xData },
+          series: [{ data: seriesData }]
+        });
+      } catch (error) {
+        console.error('更新 SSIM 图表失败:', error);
+      }
+    },
+    
+    // 更新 Eval L1 图表（支持批量数据）
+    updateEvalL1Chart() {
+      if (!this.evalL1ChartInstance) {
+        console.warn('Eval L1 图表实例未初始化');
+        return;
+      }
+      
+      try {
+        console.log('[更新 Eval L1 图表] 原始数据数量:', this.evalL1Data.length);
+        
+        // 支持两种数据格式
+        const xData = this.evalL1Data.map(item => {
+          // 新格式：{ iteration, value, type } 或旧格式：{ iter, evalL1 }
+          return (item.iteration || item.iter || 0).toString();
+        });
+        
+        const seriesData = this.evalL1Data.map(item => {
+          // 新格式：{ iteration, value }
+          if (item.value !== undefined && item.value !== null) {
+            return parseFloat(item.value);
+          }
+          // 旧格式：{ iter, evalL1 }
+          if (item.evalL1 !== undefined && item.evalL1 !== null) {
+            return parseFloat(item.evalL1);
+          }
+          return null;
+        }).filter(v => v !== null); // 过滤掉 null 值
+        
+        console.log('[更新 Eval L1 图表] 有效数据数量:', seriesData.length);
+        
+        this.evalL1ChartInstance.setOption({
+          xAxis: { data: xData },
+          series: [{ data: seriesData }]
+        });
+      } catch (error) {
+        console.error('更新 Eval L1 图表失败:', error);
+      }
+    },
+    
+    setupResizeObserver() {
+      // 延迟确保 DOM 完全渲染
+      this.$nextTick(() => {
+        const chartsGrid = document.querySelector('.charts-grid');
+        if (chartsGrid) {
+          console.log('[响应式布局] 开始监听图表容器，初始宽度:', chartsGrid.offsetWidth);
+          
+          let resizeTimer = null;
+          
+          this.resizeObserver = new ResizeObserver(entries => {
+            for (let entry of entries) {
+              const { width } = entry.contentRect;
+              console.log('[窗体大小] 图表容器宽度:', width.toFixed(2), 'px');
+              
+              // 使用防抖避免频繁调整
+              clearTimeout(resizeTimer);
+              resizeTimer = setTimeout(() => {
+                // 根据容器实际宽度动态调整布局
+                if (width < 600) {
+                  // 窄窗体：单列布局
+                  chartsGrid.style.gridTemplateColumns = '1fr';
+                  console.log('[布局切换] 单列模式');
+                } else {
+                  // 宽窗体：2x2 网格布局
+                  chartsGrid.style.gridTemplateColumns = 'repeat(2, 1fr)';
+                  console.log('[布局切换] 2x2 网格模式');
+                }
+                
+                // 同时调整所有图表大小（带延迟确保布局已更新）
+                this.$nextTick(() => {
+                  setTimeout(() => {
+                    if (this.lossChartInstance) {
+                      this.lossChartInstance.resize();
+                      console.log('[图表调整] Loss 图表已调整');
+                    }
+                    if (this.psnrChartInstance) {
+                      this.psnrChartInstance.resize();
+                      console.log('[图表调整] PSNR 图表已调整');
+                    }
+                    if (this.ssimChartInstance) {
+                      this.ssimChartInstance.resize();
+                      console.log('[图表调整] SSIM 图表已调整');
+                    }
+                    if (this.evalL1ChartInstance) {
+                      this.evalL1ChartInstance.resize();
+                      console.log('[图表调整] Eval L1 图表已调整');
+                    }
+                  }, 50); // 延迟 50ms 确保 CSS 布局已应用
+                });
+              }, 100); // 100ms 防抖
+            }
+          });
+          
+          this.resizeObserver.observe(chartsGrid);
+          console.log('[响应式布局] ✓ ResizeObserver 已启动');
+        } else {
+          console.warn('[响应式布局] ✗ 未找到 .charts-grid 元素');
+        }
+      });
+    },
+    
     handleResize() {
       // 窗口大小变化时调整图表大小
       this.$nextTick(() => {
@@ -446,6 +862,9 @@ export default {
         }
         if (this.ssimChartInstance) {
           this.ssimChartInstance.resize();
+        }
+        if (this.evalL1ChartInstance) {
+          this.evalL1ChartInstance.resize();
         }
       });
     },
@@ -461,6 +880,9 @@ export default {
         }
         if (this.ssimChartInstance) {
           this.ssimChartInstance.resize();
+        }
+        if (this.evalL1ChartInstance) {
+          this.evalL1ChartInstance.resize();
         }
       });
     },
@@ -482,15 +904,19 @@ export default {
             this.ssimChartInstance.resize();
             console.log('[窗口状态] SSIM 图表已调整');
           }
+          if (this.evalL1ChartInstance) {
+            this.evalL1ChartInstance.resize();
+            console.log('[窗口状态] Eval L1 图表已调整');
+          }
           
           // 打印容器尺寸用于调试
-          const lossContainer = this.$refs.lossChart;
-          const psnrContainer = this.$refs.psnrChart;
-          const ssimContainer = this.$refs.ssimChart;
-          if (lossContainer && psnrContainer && ssimContainer) {
-            console.log('[窗口状态] 容器尺寸 - Loss:', { width: lossContainer.offsetWidth, height: lossContainer.offsetHeight });
-            console.log('[窗口状态] 容器尺寸 - PSNR:', { width: psnrContainer.offsetWidth, height: psnrContainer.offsetHeight });
-            console.log('[窗口状态] 容器尺寸 - SSIM:', { width: ssimContainer.offsetWidth, height: ssimContainer.offsetHeight });
+          const chartsGrid = document.querySelector('.charts-grid');
+          if (chartsGrid) {
+            console.log('[窗口状态] 图表容器尺寸:', {
+              width: chartsGrid.offsetWidth,
+              height: chartsGrid.offsetHeight,
+              gridTemplateColumns: chartsGrid.style.gridTemplateColumns
+            });
           }
         });
       }, 200);
@@ -682,6 +1108,68 @@ export default {
           this.ssimChartInstance.resize();
         }, 100);
       }
+        
+      // 初始化 Eval L1 图表
+      const evalL1ChartEl = this.$refs.evalL1Chart;
+      if (evalL1ChartEl) {
+        this.evalL1ChartInstance = echarts.init(evalL1ChartEl);
+        this.evalL1ChartInstance.setOption({
+          tooltip: {
+            trigger: 'axis',
+            formatter: '{b}: @{c}'
+          },
+          xAxis: {
+            type: 'category',
+            name: '',
+            data: [],
+            axisLabel: {
+              rotate: 45
+            }
+          },
+          yAxis: {
+            type: 'value',
+            name: 'L1',
+            min: 0
+          },
+          series: [{
+            data: [],
+            type: 'line',
+            smooth: true,
+            lineStyle: {
+              color: '#f59e0b',
+              width: 2
+            },
+            itemStyle: {
+              color: '#f59e0b'
+            },
+            areaStyle: {
+              color: {
+                type: 'linear',
+                x: 0,
+                y: 0,
+                x2: 0,
+                y2: 1,
+                colorStops: [
+                  { offset: 0, color: 'rgba(245, 158, 11, 0.3)' },
+                  { offset: 1, color: 'rgba(245, 158, 11, 0.05)' }
+                ]
+              }
+            }
+          }],
+          grid: {
+            left: '10%',
+            right: '5%',
+            bottom: '15%',
+            top: '5%',
+            containLabel: true
+          }
+        });
+          
+        // 强制调整大小以确保填满容器
+        setTimeout(() => {
+          this.evalL1ChartInstance.resize();
+        }, 100);
+      }
     },
     
     setupIPCListeners() {
@@ -712,6 +1200,66 @@ export default {
           this.updatePreviewImage();
         }
       }, 3000);
+    },
+    
+    // 防抖函数：等待 500ms 无变化后再保存
+    debounceSave(func, wait) {
+      let timeout;
+      return function(...args) {
+        clearTimeout(timeout);
+        timeout = setTimeout(() => func.apply(this, args), wait);
+      };
+    },
+    
+    // 保存项目配置
+    async saveProjectConfig() {
+      if (!this.currentProjectId) {
+        console.log('[保存项目] 无 projectId，跳过保存');
+        return;
+      }
+      
+      try {
+        const config = {
+          projectName: this.projectName,
+          outputPath: this.modelPath,
+          sourcePath: this.sourcePath,
+          iterations: this.iterations,
+          resolution: this.resolution,
+          evalMode: this.evalMode,
+          gamma: this.gamma,
+          indirect: this.indirect,
+          bound: this.bound,
+          occluRes: this.occluRes,
+          occlusion: this.occlusion,
+          checkpoint: this.checkpoint
+        };
+        
+        const result = await window.electronAPI?.updateProjectConfig(
+          this.currentProjectId, 
+          config
+        );
+        
+        if (result?.success) {
+          console.log(`[保存项目] ✓ 已保存 ${this.currentProjectId}`);
+        } else {
+          console.error('[保存项目] ✗ 保存失败:', result?.error);
+          alert('项目配置保存失败，请检查磁盘权限');
+        }
+      } catch (error) {
+        console.error('[保存项目] 异常:', error);
+        alert('项目配置保存失败：' + error.message);
+      }
+    },
+    
+    // 创建防抖版本的保存函数（500ms）
+    triggerAutoSave() {
+      if (this.saveDebounceTimer) {
+        clearTimeout(this.saveDebounceTimer);
+      }
+      
+      this.saveDebounceTimer = setTimeout(() => {
+        this.saveProjectConfig();
+      }, 500);
     },
     
     handleTrainingOutput(data) {
@@ -822,12 +1370,20 @@ export default {
           }
         });
         
-        // 滚动日志到底部
+        // 滚动日志底部
         this.$nextTick(() => {
           if (this.$refs.logContainer) {
             this.$refs.logContainer.scrollTop = this.$refs.logContainer.scrollHeight;
           }
         });
+      } else if (data.type === 'eval-update') {
+        // 处理评估更新（包含 Eval L1、PSNR、SSIM）
+        console.log('[处理评估更新] 收到数据:', data.data);
+              
+        if (data.data.evalL1 !== undefined && data.data.evalL1 !== null) {
+          console.log(`[Eval L1] 更新 - iter: ${data.data.iter}, value: ${data.data.evalL1}, type: ${data.data.evalL1Type}`);
+          this.updateEvalL1Data(data.data.iter, data.data.evalL1);
+        }
       } else if (data.type === 'close') {
         this.isTraining = false;
         this.addLog(`训练进程结束，退出代码：${data.code}`, 'warning');
@@ -1013,6 +1569,44 @@ export default {
       }
     },
     
+    updateEvalL1Data(iteration, evalL1) {
+      if (!this.evalL1ChartInstance) {
+        console.warn('Eval L1 图表实例未初始化');
+        return;
+      }
+      
+      // 确保 iteration 是数字
+      const iterNum = parseInt(iteration) || 0;
+      const evalL1Value = parseFloat(evalL1);
+      
+      if (isNaN(evalL1Value)) {
+        console.warn('Eval L1 值无效:', evalL1);
+        return;
+      }
+      
+      // 静默更新，减少日志输出以提升性能
+      try {
+        // 添加数据点
+        const option = this.evalL1ChartInstance.getOption();
+        const xData = option.xAxis && option.xAxis[0] ? (option.xAxis[0].data || []) : [];
+        const seriesData = option.series && option.series[0] ? (option.series[0].data || []) : [];
+        
+        // 避免重复
+        const iterStr = iterNum.toString();
+        if (!xData.includes(iterStr)) {
+          xData.push(iterStr);
+          seriesData.push(evalL1Value);
+          
+          this.evalL1ChartInstance.setOption({
+            xAxis: { data: xData },
+            series: [{ data: seriesData }]
+          });
+        }
+      } catch (error) {
+        console.error('更新 Eval L1 图表失败:', error);
+      }
+    },
+    
     async updatePreviewImage() {
       if (!this.modelPath) {
         console.log('[预览] 模型路径为空，跳过更新');
@@ -1025,21 +1619,29 @@ export default {
         const result = await window.electronAPI?.getLatestRenderedImage(this.modelPath);
         
         if (result && result.success && result.imageBase64) {
-          // 使用 Base64 图片数据，不需要时间戳
+          // 直接使用 Base64 数据，不添加时间戳参数（避免解析失败）
           const imageUrl = result.imageBase64;
           
-          console.log('[预览] 找到最新渲染图:', result.imagePath);
+          console.log('[预览] ✓ 找到最新渲染图:', result.imagePath);
           console.log('[预览] Base64 图片大小:', (imageUrl.length / 1024).toFixed(2), 'KB');
+          console.log('[预览] Base64 前缀:', imageUrl.substring(0, 50));
           
           // 创建 Image 对象预加载，确保图片可以正常显示
           const img = new Image();
           img.onload = () => {
-            this.previewImage = imageUrl;
-            console.log('[预览] ✓ 图片加载成功并更新到界面');
+            console.log('[预览] ✓ 图片预加载成功，准备更新界面');
             console.log('[预览] 当前 iteration:', this.currentIteration);
+            
+            // 直接赋值，Vue 2 会自动响应式更新
+            this.previewImage = imageUrl;
+            
+            console.log('[预览] ✓ 界面已更新，previewImage 已设置');
           };
           img.onerror = (err) => {
-            console.error('[预览] ✗ 图片加载失败:', err);
+            console.error('[预览] ✗ 图片预加载失败:', err);
+            console.error('[预览] Base64 数据:', imageUrl.substring(0, 50) + '...');
+            // 即使预加载失败也尝试直接赋值
+            this.previewImage = imageUrl;
           };
           img.src = imageUrl;
         } else {
@@ -1048,9 +1650,11 @@ export default {
           if (result?.error) {
             console.log('[预览] 错误信息:', result.error);
           }
+          this.previewImage = null; // 明确设置为 null
         }
       } catch (error) {
         console.error('[预览] 更新失败:', error);
+        console.error('[预览] 错误堆栈:', error.stack);
       }
     },
     
@@ -1122,6 +1726,9 @@ export default {
         this.logs = [];
         this.bakingStatus = 'idle';
         
+        // 如果用户未填写项目名称，生成默认名称
+        const finalProjectName = this.projectName.trim() || this.generateDefaultProjectName();
+        
         const config = {
           modelPath: this.modelPath,
           sourcePath: this.sourcePath,
@@ -1131,7 +1738,8 @@ export default {
           imageSubdir: this.imageSubdir,
           gamma: false,
           indirect: false,
-          checkpoint: null
+          checkpoint: null,
+          projectName: finalProjectName // 新增：项目名称
         };
         
         const result = await window.electronAPI?.startTraining(config);
@@ -1140,7 +1748,7 @@ export default {
           throw new Error(result?.error || '启动训练失败');
         }
         
-        this.addLog('Stage1 训练已启动', 'success');
+        this.addLog(`Stage1 训练已启动 - 项目：${finalProjectName}`, 'success');
       } catch (error) {
         console.error('启动 Stage1 失败:', error);
         this.addLog(`启动 Stage1 失败：${error.message}`, 'error');
@@ -1236,6 +1844,9 @@ export default {
         this.currentIteration = 30000; // Stage2 从 30000 开始
         this.logs = [];
         
+        // 如果用户未填写项目名称，生成默认名称
+        const finalProjectName = this.projectName.trim() || this.generateDefaultProjectName();
+        
         const config = {
           modelPath: this.modelPath,
           sourcePath: this.sourcePath,
@@ -1245,7 +1856,8 @@ export default {
           imageSubdir: this.imageSubdir,
           gamma: this.gamma,
           indirect: this.indirect,
-          checkpoint: this.checkpoint
+          checkpoint: this.checkpoint,
+          projectName: finalProjectName // 新增：项目名称
         };
         
         const result = await window.electronAPI?.startTraining(config);
@@ -1254,7 +1866,7 @@ export default {
           throw new Error(result?.error || '启动训练失败');
         }
         
-        this.addLog('Stage2 训练已启动', 'success');
+        this.addLog(`Stage2 训练已启动 - 项目：${finalProjectName}`, 'success');
       } catch (error) {
         console.error('启动 Stage2 失败:', error);
         this.addLog(`启动 Stage2 失败：${error.message}`, 'error');
@@ -1463,12 +2075,18 @@ export default {
               : (selectedPath.includes('\\') ? '\\chkpnt30000.pth' : '/chkpnt30000.pth');
             this.checkpoint = selectedPath + checkpointName;
             this.addLog(`输出路径已设置，检查点路径自动更新为：${this.checkpoint}`, 'info');
+            // 触发自动保存
+            this.triggerAutoSave();
           } else if (model === 'sourcePath') {
             this.sourcePath = selectedPath;
             // 自动检查数据集格式
             await this.checkDatasetFormat(selectedPath);
+            // 触发自动保存
+            this.triggerAutoSave();
           } else if (model === 'checkpoint') {
             this.checkpoint = selectedPath;
+            // 触发自动保存
+            this.triggerAutoSave();
           }
         } else if (result && result.canceled) {
           console.log('用户取消了选择');
@@ -1511,6 +2129,8 @@ export default {
         if (result && !result.canceled && result.filePaths && result.filePaths.length > 0) {
           this.checkpoint = result.filePaths[0];
           console.log('选中的文件:', this.checkpoint);
+          // 选择文件后触发自动保存
+          this.triggerAutoSave();
         } else if (result && result.canceled) {
           console.log('用户取消了选择');
         } else {
@@ -1801,8 +2421,18 @@ export default {
 
 .charts-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);  /* 三列等宽 */
+  grid-template-columns: repeat(2, 1fr);  /* 默认 2 列，会被 JS 动态覆盖 */
+  grid-template-rows: auto;
   gap: 1.5rem;
+  width: 100%;
+  min-width: 0;  /* 允许收缩到更小尺寸 */
+  transition: grid-template-columns 0.3s ease;  /* 平滑过渡 */
+}
+
+/* 确保图表卡片在网格中正确填充 */
+.charts-grid .chart-card {
+  min-width: 0;  /* 防止内容溢出 */
+  min-height: 300px;  /* 最小高度确保图表可见 */
 }
 
 .chart-card {
@@ -1813,6 +2443,7 @@ export default {
   box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
   width: 100%;
   height: 100%;
+  min-height: 300px;  /* 最小高度确保图表可见 */
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
@@ -1828,8 +2459,11 @@ export default {
 }
 
 .chart-container {
-  height: 16rem;
+  height: calc(100% - 40px);  /* 减去标题和边距的高度 */
+  min-height: 240px;  /* 确保最小高度 */
   width: 100%;
+  flex: 1;  /* 占据剩余空间 */
+  position: relative;  /* 确保 ECharts 正确定位 */
 }
 
 .preview-card {
@@ -1837,7 +2471,57 @@ export default {
   border-radius: 1rem;
   border: 1px solid #e2e8f0;
   box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
-  padding: 1rem;
+  padding: 1.5rem;
+}
+
+.preview-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.refresh-preview-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  background-color: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.5rem;
+  color: #64748b;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.refresh-preview-btn:hover:not(:disabled) {
+  background-color: #f1f5f9;
+  color: #1e293b;
+}
+
+.refresh-preview-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.refresh-preview-btn .iconify {
+  font-size: 1rem;
+}
+
+.refresh-preview-btn .iconify.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.preview-title {
+  font-size: 1.125rem;
+  font-weight: bold;
+  color: #1e293b;
+  margin: 0;
 }
 
 .preview-container {
@@ -1849,17 +2533,23 @@ export default {
   display: flex;
   align-items: center;
   justify-content: center;
+  min-width: 0; /* 防止 flex 子项溢出 */
 }
 
 .preview-image {
   width: 100%;
   height: 100%;
   object-fit: contain;
+  display: block; /* 确保图片是块级元素 */
+  max-width: 100%; /* 确保不超过容器 */
+  max-height: 100%; /* 确保不超过容器 */
 }
 
 .preview-placeholder {
   color: #64748b;
   font-size: 0.875rem;
+  text-align: center;
+  padding: 1rem;
 }
 
 .iteration-overlay {

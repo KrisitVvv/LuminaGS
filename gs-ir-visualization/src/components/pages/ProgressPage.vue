@@ -62,27 +62,42 @@
           <div class="queue-card">
             <h3 class="card-title">渲染队列</h3>
             <div class="queue-list">
-              <div class="queue-item active">
-                <div class="progress-bar-indicator"></div>
+              <!-- 动态项目列表 -->
+              <div 
+                v-for="(project, index) in projectQueue" 
+                :key="project.projectId"
+                class="queue-item"
+                :class="{ active: project.status === 'training', [getStatusClass(project.status)]: true }"
+                @click="resumeProject(project)"
+              >
+                <div class="progress-bar-indicator" v-if="project.status === 'training'"></div>
+                <div class="indicator-placeholder" v-else></div>
                 <div class="item-content">
                   <div class="item-header">
-                    <span class="task-name">Task_0982_Full</span>
-                    <span class="progress-percent">{{ renderProgress }}%</span>
+                    <span class="task-name">{{ project.name }}</span>
+                    <span :class="['status-badge', getStatusClass(project.status)]">
+                      {{ getStatusText(project.status) }}
+                    </span>
                   </div>
-                  <div class="progress-track">
-                    <div class="progress-fill" :style="{ width: renderProgress + '%' }"></div>
+                  <div class="item-details">
+                    <span class="detail-text">阶段：{{ project.stage === 'stage1' ? 'Stage1' : project.stage === 'baking' ? 'Baking' : 'Stage2' }}</span>
+                    <span class="detail-separator">|</span>
+                    <span class="detail-text">迭代：{{ project.currentIteration || 0 }}</span>
+                    <span class="detail-separator" v-if="project.lastModified">|</span>
+                    <span class="detail-time" v-if="project.lastModified">更新：{{ formatLastModified(project.lastModified) }}</span>
                   </div>
+                  <div class="progress-track" v-if="project.status === 'training'">
+                    <div class="progress-fill" :style="{ width: getProgressPercent(project) + '%' }"></div>
+                  </div>
+                  <div class="progress-track empty" v-else></div>
                 </div>
               </div>
-              <div class="queue-item pending">
-                <div class="indicator-placeholder"></div>
-                <div class="item-content">
-                  <div class="item-header">
-                    <span class="task-name">Client_Review_HQ</span>
-                    <span class="status-pending">等待中</span>
-                  </div>
-                  <div class="progress-track empty"></div>
-                </div>
+              
+              <!-- 空队列提示 -->
+              <div v-if="projectQueue.length === 0" class="no-projects">
+                <div class="no-projects-icon">📋</div>
+                <div class="no-projects-text">暂无训练项目</div>
+                <div class="no-projects-hint">前往训练页面创建新项目</div>
               </div>
             </div>
           </div>
@@ -140,17 +155,34 @@ export default {
       chartTimeData: [],
       utilizationData: [],
       memoryData: [],
-      maxDataPoints: 10 // 最多显示10个数据点
+      maxDataPoints: 10, // 最多显示 10 个数据点
+          
+      // 项目队列数据
+      projectQueue: [], // 所有项目的列表
+      queueRefreshTimer: null, // 定时刷新队列的定时器
+      
+      // 渲染预览相关
+      latestRenderedImage: null, // 最新渲染图的 Base64 数据
+      renderedImageLoading: false, // 加载状态
+      renderedImagePath: null // 渲染图路径
     }
   },
   mounted() {
-    // 确保DOM完全渲染后再初始化图表
+    // 确保 DOM 完全渲染后再初始化图表
     this.$nextTick(() => {
       this.initChart();
       this.startGpuMonitoring();
       this.updateTrainingLogs();
-      
-      // 添加额外的resize监听确保图表适应
+        
+      // 加载项目队列
+      this.loadProjectQueue();
+        
+      // 定时刷新项目队列（每 5 秒）
+      this.queueRefreshTimer = setInterval(() => {
+        this.loadProjectQueue();
+      }, 5000);
+        
+      // 添加额外的 resize 监听确保图表适应
       const resizeObserver = new ResizeObserver(entries => {
         for (let entry of entries) {
           if (entry.target.id === 'gpu-chart' && this.gpuChart) {
@@ -162,7 +194,7 @@ export default {
           }
         }
       });
-      
+        
       const chartContainer = document.getElementById('gpu-chart');
       if (chartContainer) {
         resizeObserver.observe(chartContainer);
@@ -170,9 +202,17 @@ export default {
         this.resizeObserver = resizeObserver;
       }
     });
-    
+      
     // 点击其他地方关闭下拉列表
     document.addEventListener('click', this.handleDocumentClick);
+      
+    // 监听队列更新事件
+    if (window.electronAPI?.onTrainingQueueUpdate) {
+      window.electronAPI.onTrainingQueueUpdate((data) => {
+        console.log('[队列更新] 收到队列更新:', data);
+        this.loadProjectQueue();
+      });
+    }
   },
   
   beforeUnmount() {
@@ -180,15 +220,18 @@ export default {
     if (this.gpuMonitorTimer) {
       clearInterval(this.gpuMonitorTimer);
     }
+    if (this.queueRefreshTimer) {
+      clearInterval(this.queueRefreshTimer);
+    }
     // 销毁图表实例
     if (this.gpuChart) {
       this.gpuChart.dispose();
     }
-    // 断开ResizeObserver
+    // 断开 ResizeObserver
     if (this.resizeObserver) {
       this.resizeObserver.disconnect();
     }
-    // 清理resize定时器
+    // 清理 resize 定时器
     if (this.resizeTimer) {
       clearTimeout(this.resizeTimer);
     }
@@ -832,6 +875,172 @@ export default {
         this.showGpuList = false;
       }
     },
+    
+    // 加载项目队列
+    async loadProjectQueue() {
+      try {
+        if (window.electronAPI?.getProjectList) {
+          const result = await window.electronAPI.getProjectList();
+          if (result.success) {
+            this.projectQueue = result.data || [];
+            console.log('[项目队列] 已加载', this.projectQueue.length, '个项目');
+          }
+        } else {
+          console.warn('[项目队列] getProjectList API 不可用');
+          // 使用模拟数据（开发测试用）
+          this.projectQueue = [
+            {
+              projectId: 'project_20250405_1430_abc',
+              name: 'Lego Scene Training',
+              outputPath: 'E:/outputs/lego/',
+              lastModified: new Date().toISOString(),
+              status: 'training',
+              currentIteration: 18700,
+              stage: 'stage1'
+            }
+          ];
+        }
+      } catch (error) {
+        console.error('[项目队列] 加载失败:', error);
+        this.projectQueue = [];
+      }
+    },
+    
+    // 获取状态文本
+    getStatusText(status) {
+      const statusMap = {
+        waiting: '等待中',
+        training: '训练中',
+        paused: '已暂停',
+        completed: '已完成',
+        error: '错误',
+        disconnected: '已断开'
+      };
+      return statusMap[status] || status;
+    },
+    
+    // 获取状态样式类
+    getStatusClass(status) {
+      const classMap = {
+        waiting: 'status-waiting',
+        training: 'status-training',
+        paused: 'status-paused',
+        completed: 'status-completed',
+        error: 'status-error',
+        disconnected: 'status-disconnected'
+      };
+      return classMap[status] || '';
+    },
+    
+    // 点击项目项，恢复到训练页面
+    async resumeProject(project) {
+      console.log('[恢复项目] 准备恢复:', project);
+      
+      try {
+        // 先尝试加载最新渲染图（用于后续显示）
+        if (project.outputPath) {
+          await this.loadLatestRenderedImage(project.outputPath);
+        }
+        
+        // 跳转到 TrainPage 并传递 projectId 和渲染图信息
+        const query = {
+          resumeProjectId: project.projectId
+        };
+        
+        // 如果有渲染图，也传递过去
+        if (this.latestRenderedImage) {
+          query.initialPreviewImage = this.latestRenderedImage;
+        }
+        
+        this.$router.push({
+          path: '/train',
+          query
+        });
+      } catch (error) {
+        console.error('[恢复项目] 跳转失败:', error);
+        alert('恢复项目失败：' + error.message);
+      }
+    },
+    
+    // 格式化最后修改时间
+    formatLastModified(isoString) {
+      if (!isoString) return '';
+      const date = new Date(isoString);
+      const now = new Date();
+      const diffMs = now - date;
+      const diffMinutes = Math.floor(diffMs / 60000);
+      const diffHours = Math.floor(diffMs / 3600000);
+      const diffDays = Math.floor(diffMs / 86400000);
+      
+      if (diffMinutes < 1) {
+        return '刚刚';
+      } else if (diffMinutes < 60) {
+        return `${diffMinutes}分钟前`;
+      } else if (diffHours < 24) {
+        return `${diffHours}小时前`;
+      } else if (diffDays < 7) {
+        return `${diffDays}天前`;
+      } else {
+        return date.toLocaleDateString('zh-CN');
+      }
+    },
+    
+    // 计算进度百分比
+    getProgressPercent(project) {
+      if (!project.currentIteration || !project.totalIterations) {
+        return 0;
+      }
+      return Math.min(100, Math.round((project.currentIteration / project.totalIterations) * 100));
+    },
+    
+    // 加载最新渲染图像
+    async loadLatestRenderedImage(modelPath) {
+      if (!modelPath) {
+        console.log('[渲染图] 模型路径为空，跳过加载');
+        return;
+      }
+      
+      this.renderedImageLoading = true;
+      this.latestRenderedImage = null;
+      this.renderedImagePath = null;
+      
+      try {
+        const result = await window.electronAPI?.getLatestRenderedImage(modelPath);
+        
+        if (result && result.success && result.imageBase64) {
+          // 直接使用 Base64 数据，不添加时间戳参数（避免解析失败）
+          const imageUrl = result.imageBase64;
+          
+          console.log('[渲染图] 找到最新渲染图:', result.imagePath);
+          console.log('[渲染图] Base64 图片大小:', (imageUrl.length / 1024).toFixed(2), 'KB');
+          
+          // 预加载图片
+          const img = new Image();
+          img.onload = () => {
+            this.latestRenderedImage = imageUrl;
+            this.renderedImagePath = result.imagePath;
+            console.log('[渲染图] ✓ 图片加载成功');
+          };
+          img.onerror = (err) => {
+            console.error('[渲染图] ✗ 图片加载失败:', err);
+            this.latestRenderedImage = null;
+          };
+          img.src = imageUrl;
+        } else {
+          // 没有找到渲染图（可能是训练初期）
+          console.log('[渲染图] 未找到渲染图像（可能是训练初期）');
+          if (result?.error) {
+            console.log('[渲染图] 错误信息:', result.error);
+          }
+          this.latestRenderedImage = null;
+        }
+      } catch (error) {
+        console.error('[渲染图] 加载失败:', error);
+        this.latestRenderedImage = null;
+      } finally {
+        this.renderedImageLoading = false;
+      }
+    },
   }
 }
 </script>
@@ -1054,6 +1263,93 @@ export default {
 
 .no-gpus-text {
   font-size: 0.875rem;
+}
+
+/* 项目队列样式 */
+.no-projects {
+  padding: 2rem;
+  text-align: center;
+  color: #64748b;
+}
+
+.no-projects-icon {
+  font-size: 3rem;
+  margin-bottom: 1rem;
+}
+
+.no-projects-text {
+  font-size: 1rem;
+  font-weight: 500;
+  margin-bottom: 0.5rem;
+}
+
+.no-projects-hint {
+  font-size: 0.875rem;
+  color: #94a3b8;
+}
+
+.queue-item {
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.queue-item:hover {
+  background-color: #f8fafc;
+  transform: translateX(2px);
+}
+
+.item-details {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  font-size: 0.75rem;
+  color: #64748b;
+}
+
+.detail-separator {
+  color: #cbd5e1;
+}
+
+.detail-time {
+  color: #94a3b8;
+}
+
+.status-badge {
+  padding: 0.25rem 0.75rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.status-waiting {
+  background-color: #f1f5f9;
+  color: #475569;
+}
+
+.status-training {
+  background-color: #dbeafe;
+  color: #1e40af;
+}
+
+.status-paused {
+  background-color: #fef3c7;
+  color: #92400e;
+}
+
+.status-completed {
+  background-color: #dcfce7;
+  color: #166534;
+}
+
+.status-error {
+  background-color: #fee2e2;
+  color: #991b1b;
+}
+
+.status-disconnected {
+  background-color: #e2e8f0;
+  color: #475569;
 }
 
 .refresh-status {

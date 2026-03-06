@@ -375,20 +375,17 @@ def training(
                 progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{7}f}"})
                 progress_bar.update(10)
                         
-                # 每 100 次迭代输出详细训练指标（用于 GUI 绘图）
+                # 每 100 次迭代输出 Loss 和预览图（用于 GUI 绘图）
                 if iteration % 100 == 0:
                     # 格式化输出，确保前端能正确解析
                     loss_str = f"{ema_loss_for_log:.7f}"
                             
-                    # 计算 PSNR
+                    # PSNR 和 SSIM 将在每 1000 次迭代的 training_report 中计算
+                    # 这里不单独计算，避免重复计算和性能开销
                     psnr_val = None
-                    try:
-                        with torch.no_grad():
-                            psnr_val = psnr(image, gt_image).item()
-                    except Exception as e:
-                        print(f"PSNR 计算失败：{e}", flush=True)
+                    ssim_val = None
                             
-                    # 保存预览图
+                    # 保存预览图（每 100 次都保存）
                     preview_path = None
                     try:
                         point_dir = os.path.join(args.model_path, "point")
@@ -401,14 +398,31 @@ def training(
                             
                     # 重要：使用 sys.stdout.write 并立即刷新，避免被 tqdm 影响
                     import sys
+                    import json
+                    
+                    # 原有格式输出（保持向后兼容）
                     sys.stdout.write(f"\n=== TRAINING_ITERATION {iteration} ===\n")
                     sys.stdout.write(f"LOSS_VALUE: {loss_str}\n")
-                    if psnr_val is not None:
-                        sys.stdout.write(f"PSNR_VALUE: {psnr_val:.6f}\n")
                     if preview_path:
                         sys.stdout.write(f"PREVIEW_SAVED: {preview_path}\n")
                     sys.stdout.write(f"=== END_ITERATION {iteration} ===\n")
+                    
+                    # 新增：JSON 格式输出（用于状态持久化）
+                    # 注意：psnr 和 ssim 为 null，等待 1000 次迭代时由 training_report 输出
+                    state_update = {
+                        "iter": iteration,
+                        "loss": float(loss_str),
+                        "psnr": None,  # 将在 1000 次迭代时由 EVAL_TRAIN_PSNR 提供
+                        "ssim": None,  # 将在 1000 次迭代时由 EVAL_TRAIN_SSIM 提供
+                        "preview": preview_path
+                    }
+                    sys.stdout.write(f"TRAINING_STATE_UPDATE: {json.dumps(state_update)}\n")
                     sys.stdout.flush()  # 立即刷新缓冲区
+                    
+                    # 每 100 次迭代输出评估指标（test 和 train）
+                    if iteration % 1000 == 0 and (iteration < 30000 or iteration in testing_iterations):
+                        # 临时执行一次评估并输出结果
+                        pass  # 评估逻辑在下面 training_report 中
                             
             if iteration == opt.iterations:
                 progress_bar.close()
@@ -537,7 +551,7 @@ def training_report(
         tb_writer.add_scalar("iter_time", elapsed, iteration)
 
     # Report test and samples of training set
-    if iteration in testing_iterations:
+    if iteration in testing_iterations or (iteration % 1000 == 0 and iteration < 30000):
         torch.cuda.empty_cache()
         validation_configs = (
             {"name": "test", "cameras": scene.getTestCameras()},
@@ -741,6 +755,12 @@ def training_report(
                 print(
                     f"\n[ITER {iteration}] Evaluating {config['name']}: L1 {l1_test:.6f} PSNR: {psnr_test:.6f} SSIM {ssim_test:.6f}"
                 )
+                # 前端解析用的格式化输出
+                import sys
+                sys.stdout.write(f"EVAL_{config['name'].upper()}_L1: {l1_test:.6f}\n")
+                sys.stdout.write(f"EVAL_{config['name'].upper()}_PSNR: {psnr_test:.6f}\n")
+                sys.stdout.write(f"EVAL_{config['name'].upper()}_SSIM: {ssim_test:.6f}\n")
+                sys.stdout.flush()
                 if tb_writer:
                     tb_writer.add_scalar(
                         config["name"] + "/loss_viewpoint - l1_loss", l1_test, iteration

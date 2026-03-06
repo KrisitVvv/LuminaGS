@@ -1,0 +1,32 @@
+[
+  {
+    "projectId": "project_20260307_051_20260307_0514_wnb",
+    "name": "project_20260307_0514",
+    "outputPath": "E:\\GraduationProject\\Testoutput",
+    "lastModified": "2026-03-06T21:14:50.205Z",
+    "status": "error",
+    "currentIteration": 0,
+    "configFile": "E:\\GraduationProject\\Testoutput\\.luminags\\project_20260307_051_20260307_0514_wnb.json",
+    "stage": "stage1"
+  },
+  {
+    "projectId": "project_20260307_051_20260307_0518_ck2",
+    "name": "project_20260307_0518",
+    "outputPath": "E:\\GraduationProject\\Testoutput",
+    "lastModified": "2026-03-06T22:48:50.194Z",
+    "status": "waiting",
+    "currentIteration": 30000,
+    "configFile": "E:\\GraduationProject\\Testoutput\\.luminags\\project_20260307_051_20260307_0518_ck2.json",
+    "stage": "stage1"
+  },
+  {
+    "projectId": "project_20260307_065_20260307_0656_8vw",
+    "name": "project_20260307_0656",
+    "outputPath": "E:\\GraduationProject\\产出\\test",
+    "lastModified": "2026-03-06T22:57:03.660Z",
+    "status": "waiting",
+    "currentIteration": 200,
+    "configFile": "E:\\GraduationProject\\产出\\test\\.luminags\\project_20260307_065_20260307_0656_8vw.json",
+    "stage": "stage1"
+  }
+]
