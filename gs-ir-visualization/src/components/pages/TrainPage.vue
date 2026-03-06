@@ -1006,11 +1006,27 @@ export default {
           resize: this.resolution > 1
         });
         
+        // 检查是否是用户主动取消
+        if (result?.cancelled) {
+          this.addLog('数据集转换已被用户取消', 'warning');
+          this.isConverting = false;
+          this.isStopping = false;
+          return; // 正常退出，不显示错误
+        }
+        
         if (!result?.success) {
           throw new Error(result?.error || '转换失败');
         }
         
       } catch (error) {
+        // 忽略用户取消的情况
+        if (error.message.includes('取消') || error.message.includes('cancelled')) {
+          console.log('用户取消了转换操作');
+          this.isConverting = false;
+          this.isStopping = false;
+          return;
+        }
+        
         console.error('数据集转换失败:', error);
         this.addConversionLog(`错误：${error.message}`, 'error');
         this.addLog(`数据集转换失败：${error.message}`, 'error');
@@ -1065,37 +1081,68 @@ export default {
     },
     
     async stopTraining() {
+      console.log('[停止操作] 开始执行停止流程');
+      
       try {
+        // 停止训练进程
         if (this.isTraining) {
+          console.log('[停止操作] 正在停止训练进程...');
           try {
-            await window.electronAPI?.stopTraining();
+            const result = await window.electronAPI?.stopTraining();
+            console.log('[停止操作] 训练进程停止结果:', result);
+            
+            if (result?.success) {
+              this.addLog('训练进程已成功停止', 'warning');
+            } else {
+              console.warn('[停止操作] 训练进程停止失败:', result?.error);
+              this.addLog(`训练进程停止失败：${result?.error || '未知错误'}`, 'error');
+            }
           } catch (ipcError) {
-            console.warn('停止训练进程 IPC 调用失败，但继续更新本地状态:', ipcError);
+            console.error('[停止操作] 停止训练进程 IPC 调用失败:', ipcError);
+            this.addLog(`停止训练进程通信失败：${ipcError.message}`, 'error');
           }
+          
+          // 无论是否成功，都更新本地状态
           this.isTraining = false;
-          this.addLog('训练已停止', 'warning');
+          this.addLog('训练状态已更新为已停止', 'warning');
         }
         
+        // 停止烘焙进程
         if (this.isBaking) {
+          console.log('[停止操作] 正在停止烘焙进程...');
           try {
-            await window.electronAPI?.stopBaking();
+            const result = await window.electronAPI?.stopBaking();
+            console.log('[停止操作] 烘焙进程停止结果:', result);
+            
+            if (result?.success) {
+              this.addBakingLog('烘焙进程已成功停止', 'warning');
+            } else {
+              console.warn('[停止操作] 烘焙进程停止失败:', result?.error);
+              this.addBakingLog(`烘焙进程停止失败：${result?.error || '未知错误'}`, 'error');
+            }
           } catch (ipcError) {
-            console.warn('停止烘焙进程 IPC 调用失败，但继续更新本地状态:', ipcError);
+            console.error('[停止操作] 停止烘焙进程 IPC 调用失败:', ipcError);
+            this.addBakingLog(`停止烘焙进程通信失败：${ipcError.message}`, 'error');
           }
+          
+          // 无论是否成功，都更新本地状态
           this.isBaking = false;
           this.bakingStatus = 'error';
-          this.addBakingLog('烘焙已停止', 'warning');
+          this.addBakingLog('烘焙状态已更新为已停止', 'warning');
         }
         
-        // 无论是否成功，都更新 UI 状态
+        // 强制更新 UI
         this.$forceUpdate();
+        console.log('[停止操作] 停止流程完成');
+        
       } catch (error) {
-        console.error('停止训练异常:', error);
+        console.error('[停止操作] 发生异常:', error);
         // 即使出错也强制更新状态
         this.isTraining = false;
         this.isBaking = false;
         this.bakingStatus = 'error';
         this.addLog(`停止操作完成（可能未完全停止）`, 'warning');
+        this.$forceUpdate();
       }
     },
     

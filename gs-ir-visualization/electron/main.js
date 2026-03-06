@@ -162,6 +162,7 @@ let currentSelectedGpuIndex = -1;
 let trainingProcess = null;
 let bakingProcess = null;
 let conversionProcess = null;
+let conversionCancelled = false; // 标记转换是否被用户取消
 
 // 设置选中 GPU 索引
 ipcMain.handle('set-selected-gpu-index', async (event, index) => {
@@ -420,26 +421,218 @@ ipcMain.handle('start-baking', async (event, config) => {
 
 ipcMain.handle('stop-training', async () => {
   try {
+    console.log('===== 收到停止训练请求 =====');
+    
     if (trainingProcess) {
-      trainingProcess.kill();
-      trainingProcess = null;
-      return { success: true };
+      const pid = trainingProcess.pid;
+      console.log('[停止训练] 当前训练进程 PID:', pid);
+      console.log('[停止训练] 进程对象信息:', {
+        killed: trainingProcess.killed,
+        exitCode: trainingProcess.exitCode,
+        signalCode: trainingProcess.signalCode
+      });
+      
+      // Windows 上使用 taskkill 强制终止进程树
+      if (process.platform === 'win32') {
+        const { spawn } = require('child_process');
+        
+        console.log('[停止训练] Windows 平台，使用 taskkill 终止进程树...');
+        
+        return new Promise((resolve) => {
+          try {
+            const taskkill = spawn('taskkill', ['/pid', pid.toString(), '/f', '/t']);
+            
+            let stdout = '';
+            let stderr = '';
+            
+            taskkill.stdout.on('data', (data) => {
+              const output = data.toString();
+              stdout += output;
+              console.log('[taskkill stdout]', output);
+            });
+            
+            taskkill.stderr.on('data', (data) => {
+              const output = data.toString();
+              stderr += output;
+              console.error('[taskkill stderr]', output);
+            });
+            
+            taskkill.on('close', (code) => {
+              console.log('[taskkill] 进程退出，代码:', code);
+              
+              if (code === 0) {
+                console.log('[停止训练] ✓ 成功终止训练进程及其子进程');
+                trainingProcess = null;
+                resolve({ success: true, message: '训练进程已停止' });
+              } else {
+                console.error('[停止训练] ✗ taskkill 失败，代码:', code, stderr);
+                // 尝试备用方案：直接 kill
+                try {
+                  trainingProcess.kill('SIGKILL');
+                  console.log('[停止训练] 使用 SIGKILL 备用方案成功');
+                  trainingProcess = null;
+                  resolve({ success: true, message: '训练进程已通过备用方案停止' });
+                } catch (killError) {
+                  console.error('[停止训练] ✗ 所有终止方法都失败:', killError);
+                  resolve({ success: false, error: `终止进程失败：${stderr || killError.message}` });
+                }
+              }
+            });
+            
+            taskkill.on('error', (err) => {
+              console.error('[taskkill] 进程启动失败:', err);
+              // 尝试备用方案
+              try {
+                trainingProcess.kill('SIGKILL');
+                console.log('[停止训练] 使用 SIGKILL 备用方案成功');
+                trainingProcess = null;
+                resolve({ success: true, message: '训练进程已通过备用方案停止' });
+              } catch (killError) {
+                resolve({ success: false, error: err.message });
+              }
+            });
+            
+            // 设置超时，防止 taskkill 挂起
+            setTimeout(() => {
+              console.warn('[停止训练] ⚠ taskkill 超时 5 秒，强制清理...');
+              try {
+                trainingProcess.kill('SIGKILL');
+                trainingProcess = null;
+                resolve({ success: true, message: '训练进程通过超时机制停止' });
+              } catch (err) {
+                resolve({ success: false, error: '终止进程超时且失败' });
+              }
+            }, 5000);
+            
+          } catch (spawnError) {
+            console.error('[停止训练] 启动 taskkill 失败:', spawnError);
+            resolve({ success: false, error: spawnError.message });
+          }
+        });
+      } else {
+        // Unix/Linux/macOS 平台
+        console.log('[停止训练] Unix 平台，使用 SIGKILL 信号...');
+        trainingProcess.kill('SIGKILL');
+        trainingProcess = null;
+        console.log('[停止训练] ✓ 训练进程已停止');
+        return { success: true };
+      }
+    } else {
+      console.warn('[停止训练] ⚠ 没有正在运行的训练进程');
+      return { success: false, error: '没有正在运行的训练进程' };
     }
-    return { success: false, error: '没有正在运行的训练进程' };
   } catch (error) {
+    console.error('[停止训练] ✗ 发生异常:', error);
+    console.error('[停止训练] 错误堆栈:', error.stack);
     return { success: false, error: error.message };
   }
 });
 
 ipcMain.handle('stop-baking', async () => {
   try {
+    console.log('===== 收到停止烘焙请求 =====');
+    
     if (bakingProcess) {
-      bakingProcess.kill();
-      bakingProcess = null;
-      return { success: true };
+      const pid = bakingProcess.pid;
+      console.log('[停止烘焙] 当前烘焙进程 PID:', pid);
+      console.log('[停止烘焙] 进程对象信息:', {
+        killed: bakingProcess.killed,
+        exitCode: bakingProcess.exitCode,
+        signalCode: bakingProcess.signalCode
+      });
+      
+      // Windows 上使用 taskkill 强制终止进程树
+      if (process.platform === 'win32') {
+        const { spawn } = require('child_process');
+        
+        console.log('[停止烘焙] Windows 平台，使用 taskkill 终止进程树...');
+        
+        return new Promise((resolve) => {
+          try {
+            const taskkill = spawn('taskkill', ['/pid', pid.toString(), '/f', '/t']);
+            
+            let stdout = '';
+            let stderr = '';
+            
+            taskkill.stdout.on('data', (data) => {
+              const output = data.toString();
+              stdout += output;
+              console.log('[taskkill stdout]', output);
+            });
+            
+            taskkill.stderr.on('data', (data) => {
+              const output = data.toString();
+              stderr += output;
+              console.error('[taskkill stderr]', output);
+            });
+            
+            taskkill.on('close', (code) => {
+              console.log('[taskkill] 进程退出，代码:', code);
+              
+              if (code === 0) {
+                console.log('[停止烘焙] ✓ 成功终止烘焙进程及其子进程');
+                bakingProcess = null;
+                resolve({ success: true, message: '烘焙进程已停止' });
+              } else {
+                console.error('[停止烘焙] ✗ taskkill 失败，代码:', code, stderr);
+                // 尝试备用方案：直接 kill
+                try {
+                  bakingProcess.kill('SIGKILL');
+                  console.log('[停止烘焙] 使用 SIGKILL 备用方案成功');
+                  bakingProcess = null;
+                  resolve({ success: true, message: '烘焙进程已通过备用方案停止' });
+                } catch (killError) {
+                  console.error('[停止烘焙] ✗ 所有终止方法都失败:', killError);
+                  resolve({ success: false, error: `终止进程失败：${stderr || killError.message}` });
+                }
+              }
+            });
+            
+            taskkill.on('error', (err) => {
+              console.error('[taskkill] 进程启动失败:', err);
+              // 尝试备用方案
+              try {
+                bakingProcess.kill('SIGKILL');
+                console.log('[停止烘焙] 使用 SIGKILL 备用方案成功');
+                bakingProcess = null;
+                resolve({ success: true, message: '烘焙进程已通过备用方案停止' });
+              } catch (killError) {
+                resolve({ success: false, error: err.message });
+              }
+            });
+            
+            // 设置超时，防止 taskkill 挂起
+            setTimeout(() => {
+              console.warn('[停止烘焙] ⚠ taskkill 超时 5 秒，强制清理...');
+              try {
+                bakingProcess.kill('SIGKILL');
+                bakingProcess = null;
+                resolve({ success: true, message: '烘焙进程通过超时机制停止' });
+              } catch (err) {
+                resolve({ success: false, error: '终止进程超时且失败' });
+              }
+            }, 5000);
+            
+          } catch (spawnError) {
+            console.error('[停止烘焙] 启动 taskkill 失败:', spawnError);
+            resolve({ success: false, error: spawnError.message });
+          }
+        });
+      } else {
+        // Unix/Linux/macOS 平台
+        console.log('[停止烘焙] Unix 平台，使用 SIGKILL 信号...');
+        bakingProcess.kill('SIGKILL');
+        bakingProcess = null;
+        console.log('[停止烘焙] ✓ 烘焙进程已停止');
+        return { success: true };
+      }
+    } else {
+      console.warn('[停止烘焙] ⚠ 没有正在运行的烘焙进程');
+      return { success: false, error: '没有正在运行的烘焙进程' };
     }
-    return { success: false, error: '没有正在运行的烘焙进程' };
   } catch (error) {
+    console.error('[停止烘焙] ✗ 发生异常:', error);
+    console.error('[停止烘焙] 错误堆栈:', error.stack);
     return { success: false, error: error.message };
   }
 });
@@ -447,12 +640,25 @@ ipcMain.handle('stop-baking', async () => {
 ipcMain.handle('stop-conversion', async () => {
   try {
     if (conversionProcess) {
-      conversionProcess.kill();
+      const pid = conversionProcess.pid;
+      console.log('正在停止转换进程，PID:', pid);
+      
+      // Windows 上使用 taskkill 强制终止进程树
+      if (process.platform === 'win32') {
+        const { spawn } = require('child_process');
+        spawn('taskkill', ['/pid', pid.toString(), '/f', '/t']);
+      } else {
+        conversionProcess.kill('SIGKILL');
+      }
+      
+      conversionCancelled = true; // 标记为用户主动取消
       conversionProcess = null;
+      console.log('转换进程已停止');
       return { success: true };
     }
     return { success: false, error: '没有正在运行的转换进程' };
   } catch (error) {
+    console.error('停止转换进程失败:', error);
     return { success: false, error: error.message };
   }
 });
@@ -1324,6 +1530,15 @@ ipcMain.handle('convert-dataset', async (event, config) => {
     });
     
     console.log('[CONVERT] 进程退出，代码:', exitCode);
+    
+    // 检查是否是用户主动取消
+    if (conversionCancelled) {
+      conversionCancelled = false; // 重置标志
+      mainWindow.webContents.send('conversion-close', { code: -1 }); // 发送特殊代码表示取消
+      conversionProcess = null;
+      return { success: true, cancelled: true }; // 返回成功但标记为取消
+    }
+    
     mainWindow.webContents.send('conversion-close', { code: exitCode });
     conversionProcess = null;
     
