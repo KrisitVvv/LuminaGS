@@ -24,7 +24,11 @@ const createWindow = () => {
     webPreferences: {
       nodeIntegration: false, 
       contextIsolation: true,
-      preload: __dirname + '/preload.js'
+      preload: __dirname + '/preload.js',
+      // 允许加载本地文件
+      webviewTag: true,
+      // 允许跨域请求本地文件
+      sandbox: false
     }
   })
 
@@ -317,16 +321,50 @@ ipcMain.handle('start-training', async (event, config) => {
     if (indirect) args.push('--indirect');
     
     // 处理分辨率参数
-    // 注意：image_<num> 目录已经是压缩过的图像，所以-r 参数始终为 2（除了原始分辨率）
-    let resolutionParam = resolution;
-    if (resolution >= 2) {
-      // 对于 1/2, 1/4, 1/8, 1/16 分辨率，-r 参数都设为 2
-      // 因为 image_<num> 目录已经提供了第一级压缩
-      resolutionParam = 2;
+    // 根据实际使用的 imageSubdir 和 resolution 决定 -r 参数
+    // - 如果使用 images 目录（原图），-r = resolution（完整的压缩比例）
+    // - 如果使用 images_X 目录（已压缩），-r = resolution / X（二次压缩）
+    let finalResolutionParam = null;
+    if (resolution && resolution > 1) {
+      finalResolutionParam = resolution;
+          
+      // 如果使用了预压缩目录，需要调整 -r 参数
+      if (imageSubdir === 'images_2' && resolution === 2) {
+        // 1/2 分辨率 + images_2 目录：不需要额外压缩
+        finalResolutionParam = 1;
+      } else if (imageSubdir === 'images_4') {
+        if (resolution === 4) {
+          // 1/4 分辨率 + images_4 目录：不需要额外压缩
+          finalResolutionParam = 1;
+        } else if (resolution === 8) {
+          // 1/8 分辨率 + images_4 目录：需要再压缩 2 倍
+          finalResolutionParam = 2;
+        } else if (resolution === 16) {
+          // 1/16 分辨率 + images_4 目录：需要再压缩 4 倍
+          finalResolutionParam = 4;
+        }
+      } else if (imageSubdir === 'images_8') {
+        if (resolution === 8) {
+          // 1/8 分辨率 + images_8 目录：不需要额外压缩
+          finalResolutionParam = 1;
+        } else if (resolution === 16) {
+          // 1/16 分辨率 + images_8 目录：需要再压缩 2 倍
+          finalResolutionParam = 2;
+        }
+      }
+      // 其他情况（使用 images 目录）：finalResolutionParam = resolution
+          
+      if (finalResolutionParam > 1) {
+        args.push('-r', finalResolutionParam.toString());
+      }
     }
-    if (resolutionParam && resolutionParam > 1) {
-      args.push('-r', resolutionParam.toString());
-    }
+    
+    // 输出调试信息
+    console.log(`分辨率设置：目标=${resolution}, imageSubdir="${imageSubdir}", 实际 -r 参数=${finalResolutionParam || '未设置'}`);
+    mainWindow.webContents.send('training-output', { 
+      type: 'stdout', 
+      data: `📊 分辨率配置：目标 1/${resolution} | 使用目录：${imageSubdir} | -r 参数：${finalResolutionParam || '1(不压缩)'}\n` 
+    });
     
     if (checkpoint) {
       args.push('--start_checkpoint', checkpoint);
@@ -461,11 +499,11 @@ ipcMain.handle('stop-training', async () => {
               console.log('[taskkill] 进程退出，代码:', code);
               
               if (code === 0) {
-                console.log('[停止训练] ✓ 成功终止训练进程及其子进程');
+                console.log('[停止训练] 成功终止训练进程及其子进程');
                 trainingProcess = null;
                 resolve({ success: true, message: '训练进程已停止' });
               } else {
-                console.error('[停止训练] ✗ taskkill 失败，代码:', code, stderr);
+                console.error('[停止训练] taskkill 失败，代码:', code, stderr);
                 // 尝试备用方案：直接 kill
                 try {
                   trainingProcess.kill('SIGKILL');
@@ -473,7 +511,7 @@ ipcMain.handle('stop-training', async () => {
                   trainingProcess = null;
                   resolve({ success: true, message: '训练进程已通过备用方案停止' });
                 } catch (killError) {
-                  console.error('[停止训练] ✗ 所有终止方法都失败:', killError);
+                  console.error('[停止训练] 所有终止方法都失败:', killError);
                   resolve({ success: false, error: `终止进程失败：${stderr || killError.message}` });
                 }
               }
@@ -494,7 +532,7 @@ ipcMain.handle('stop-training', async () => {
             
             // 设置超时，防止 taskkill 挂起
             setTimeout(() => {
-              console.warn('[停止训练] ⚠ taskkill 超时 5 秒，强制清理...');
+              console.warn('[停止训练] taskkill 超时 5 秒，强制清理...');
               try {
                 trainingProcess.kill('SIGKILL');
                 trainingProcess = null;
@@ -514,15 +552,15 @@ ipcMain.handle('stop-training', async () => {
         console.log('[停止训练] Unix 平台，使用 SIGKILL 信号...');
         trainingProcess.kill('SIGKILL');
         trainingProcess = null;
-        console.log('[停止训练] ✓ 训练进程已停止');
+        console.log('[停止训练] 训练进程已停止');
         return { success: true };
       }
     } else {
-      console.warn('[停止训练] ⚠ 没有正在运行的训练进程');
+      console.warn('[停止训练] 没有正在运行的训练进程');
       return { success: false, error: '没有正在运行的训练进程' };
     }
   } catch (error) {
-    console.error('[停止训练] ✗ 发生异常:', error);
+    console.error('[停止训练] 发生异常:', error);
     console.error('[停止训练] 错误堆栈:', error.stack);
     return { success: false, error: error.message };
   }
@@ -703,10 +741,25 @@ ipcMain.handle('get-latest-rendered-image', async (event, modelPath) => {
         filesWithStats.sort((a, b) => b.mtime - a.mtime);
         const latestFile = filesWithStats[0].filePath;
         
-        return { 
-          success: true, 
-          imagePath: latestFile 
-        };
+        console.log('[图片加载] 找到最新渲染图:', latestFile);
+        
+        // 读取文件并转换为 Base64
+        try {
+          const imageData = await fs.readFile(latestFile);
+          const base64Image = imageData.toString('base64');
+          const dataUrl = `data:image/png;base64,${base64Image}`;
+          
+          console.log('[图片加载] 图片已转换为 Base64，大小:', (imageData.length / 1024).toFixed(2), 'KB');
+          
+          return { 
+            success: true, 
+            imageBase64: dataUrl,
+            imagePath: latestFile
+          };
+        } catch (readError) {
+          console.error('[图片加载] 读取文件失败:', readError);
+          return { success: false, error: `读取图片失败：${readError.message}` };
+        }
       }
     }
     

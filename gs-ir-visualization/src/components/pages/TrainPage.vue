@@ -152,6 +152,10 @@
               <h4 class="chart-title">峰值信噪比 (PSNR)</h4>
               <div ref="psnrChart" class="chart-container"></div>
             </div>
+            <div class="chart-card">
+              <h4 class="chart-title">结构相似性 (SSIM)</h4>
+              <div ref="ssimChart" class="chart-container"></div>
+            </div>
           </div>
           
           <div class="preview-card">
@@ -280,10 +284,12 @@ export default {
       // 图表实例
       lossChartInstance: null,
       psnrChartInstance: null,
+      ssimChartInstance: null,
       
       // 图表数据
       lossData: [],
       psnrData: [],
+      ssimData: [],
       
       // 日志
       logs: [],
@@ -334,6 +340,10 @@ export default {
     this.initCharts();
     this.setupIPCListeners();
     window.addEventListener('resize', this.handleResize);
+    
+    // 监听 Electron 窗口状态变化事件
+    window.addEventListener('window-maximized', this.handleWindowMaximized);
+    window.addEventListener('window-restored', this.handleWindowRestored);
   },
   beforeUnmount() {
     if (this.lossChartInstance) {
@@ -342,30 +352,148 @@ export default {
     if (this.psnrChartInstance) {
       this.psnrChartInstance.dispose();
     }
+    if (this.ssimChartInstance) {
+      this.ssimChartInstance.dispose();
+    }
     window.removeEventListener('resize', this.handleResize);
+    window.removeEventListener('window-maximized', this.handleWindowMaximized);
+    window.removeEventListener('window-restored', this.handleWindowRestored);
   },
   methods: {
-    handleResolutionChange() {
-      // 根据分辨率压缩比例自动设置图片子目录
-      // 注意：images_<num> 目录表示已经压缩过的图像
-      // images_8 = 1/8 原图大小，images_4 = 1/4 原图大小，images_2 = 1/2 原图大小
+    async handleResolutionChange() {
+      // 分辨率压缩逻辑优化：
+      // 1. 优先查找预压缩目录（images_2, images_4, images_8）
+      // 2. 如果预压缩目录不存在，回退到 images 目录并使用 -r 参数
+      // 3. imageSubdir 决定输入来源，resolution 参数决定最终输出压缩比
+      
+      let preferredSubdir = 'images';
+      let fallbackNeeded = false;
+      
       if (this.resolution === 16) {
-        this.imageSubdir = 'images_8';
-        // 1/16 分辨率：使用 images_8 目录（已压缩到 1/8），再通过 -r=2 压缩到 1/16
+        // 1/16 分辨率：优先使用 images_8，其次 images_4，最后 images
+        if (await this.checkDirectoryExists('images_8')) {
+          preferredSubdir = 'images_8';
+        } else if (await this.checkDirectoryExists('images_4')) {
+          preferredSubdir = 'images_4';
+        } else {
+          preferredSubdir = 'images';
+          fallbackNeeded = true;
+        }
       } else if (this.resolution === 8) {
-        this.imageSubdir = 'images_4';
-        // 1/8 分辨率：使用 images_4 目录（已压缩到 1/4），再通过 -r=2 压缩到 1/8
+        // 1/8 分辨率：优先使用 images_8，否则用 images + r=8
+        if (await this.checkDirectoryExists('images_8')) {
+          preferredSubdir = 'images_8';
+        } else {
+          preferredSubdir = 'images';
+          fallbackNeeded = true;
+        }
       } else if (this.resolution === 4) {
-        this.imageSubdir = 'images_2';
-        // 1/4 分辨率：使用 images_2 目录（已压缩到 1/2），再通过 -r=2 压缩到 1/4
+        // 1/4 分辨率：优先使用 images_4，否则用 images + r=4
+        if (await this.checkDirectoryExists('images_4')) {
+          preferredSubdir = 'images_4';
+        } else {
+          preferredSubdir = 'images';
+          fallbackNeeded = true;
+        }
       } else if (this.resolution === 2) {
-        this.imageSubdir = 'images';
-        // 1/2 分辨率：使用 images 目录（原图），通过 -r=2 压缩到 1/2
+        // 1/2 分辨率：优先使用 images_2，否则用 images + r=2
+        if (await this.checkDirectoryExists('images_2')) {
+          preferredSubdir = 'images_2';
+        } else {
+          preferredSubdir = 'images';
+          fallbackNeeded = true;
+        }
       } else {
-        this.imageSubdir = 'images';
         // 原始分辨率：使用 images 目录，不需要压缩
+        preferredSubdir = 'images';
       }
-      this.addLog(`分辨率压缩设置为 1/${this.resolution}，将使用 ${this.imageSubdir} 目录`, 'info');
+      
+      this.imageSubdir = preferredSubdir;
+      
+      // 构建日志信息
+      if (fallbackNeeded) {
+        this.addLog(`分辨率 1/${this.resolution}：未找到预压缩目录，使用 ${this.imageSubdir} + -r ${this.resolution} 参数`, 'info');
+      } else {
+        this.addLog(`分辨率 1/${this.resolution}：使用预压缩目录 ${this.imageSubdir}`, 'success');
+      }
+    },
+    
+    // 检查数据集目录下的子目录是否存在
+    async checkDirectoryExists(subdirName) {
+      try {
+        if (!this.sourcePath) {
+          return false;
+        }
+        const result = await window.electronAPI?.checkDirectoryExists({
+          basePath: this.sourcePath,
+          subdir: subdirName
+        });
+        return result?.exists || false;
+      } catch (error) {
+        console.error(`检查目录 ${subdirName} 失败:`, error);
+        return false;
+      }
+    },
+    
+    handleResize() {
+      // 窗口大小变化时调整图表大小
+      this.$nextTick(() => {
+        if (this.lossChartInstance) {
+          this.lossChartInstance.resize();
+        }
+        if (this.psnrChartInstance) {
+          this.psnrChartInstance.resize();
+        }
+        if (this.ssimChartInstance) {
+          this.ssimChartInstance.resize();
+        }
+      });
+    },
+    
+    handleWindowMaximized() {
+      console.log('[窗口状态] 最大化/全屏，调整图表...');
+      this.$nextTick(() => {
+        if (this.lossChartInstance) {
+          this.lossChartInstance.resize();
+        }
+        if (this.psnrChartInstance) {
+          this.psnrChartInstance.resize();
+        }
+        if (this.ssimChartInstance) {
+          this.ssimChartInstance.resize();
+        }
+      });
+    },
+    
+    handleWindowRestored() {
+      console.log('[窗口状态] 恢复窗口模式，调整图表...');
+      // 延迟一点确保窗口尺寸已稳定
+      setTimeout(() => {
+        this.$nextTick(() => {
+          if (this.lossChartInstance) {
+            this.lossChartInstance.resize();
+            console.log('[窗口状态] Loss 图表已调整');
+          }
+          if (this.psnrChartInstance) {
+            this.psnrChartInstance.resize();
+            console.log('[窗口状态] PSNR 图表已调整');
+          }
+          if (this.ssimChartInstance) {
+            this.ssimChartInstance.resize();
+            console.log('[窗口状态] SSIM 图表已调整');
+          }
+          
+          // 打印容器尺寸用于调试
+          const lossContainer = this.$refs.lossChart;
+          const psnrContainer = this.$refs.psnrChart;
+          const ssimContainer = this.$refs.ssimChart;
+          if (lossContainer && psnrContainer && ssimContainer) {
+            console.log('[窗口状态] 容器尺寸 - Loss:', { width: lossContainer.offsetWidth, height: lossContainer.offsetHeight });
+            console.log('[窗口状态] 容器尺寸 - PSNR:', { width: psnrContainer.offsetWidth, height: psnrContainer.offsetHeight });
+            console.log('[窗口状态] 容器尺寸 - SSIM:', { width: ssimContainer.offsetWidth, height: ssimContainer.offsetHeight });
+          }
+        });
+      }, 200);
     },
     
     initCharts() {
@@ -380,7 +508,7 @@ export default {
           },
           xAxis: {
             type: 'category',
-            name: 'Iteration',
+            name: '',
             data: [],
             axisLabel: {
               rotate: 45
@@ -423,6 +551,11 @@ export default {
             containLabel: true
           }
         });
+        
+        // 强制调整大小以确保填满容器
+        setTimeout(() => {
+          this.lossChartInstance.resize();
+        }, 100);
       }
       
       // 初始化 PSNR 图表
@@ -436,7 +569,7 @@ export default {
           },
           xAxis: {
             type: 'category',
-            name: 'Iteration',
+            name: '',
             data: [],
             axisLabel: {
               rotate: 45
@@ -480,6 +613,74 @@ export default {
             containLabel: true
           }
         });
+        
+        // 强制调整大小以确保填满容器
+        setTimeout(() => {
+          this.psnrChartInstance.resize();
+        }, 100);
+      }
+      
+      // 初始化 SSIM 图表
+      const ssimChartEl = this.$refs.ssimChart;
+      if (ssimChartEl) {
+        this.ssimChartInstance = echarts.init(ssimChartEl);
+        this.ssimChartInstance.setOption({
+          tooltip: {
+            trigger: 'axis',
+            formatter: '{b}: @{c}'
+          },
+          xAxis: {
+            type: 'category',
+            name: '',
+            data: [],
+            axisLabel: {
+              rotate: 45
+            }
+          },
+          yAxis: {
+            type: 'value',
+            name: 'SSIM',
+            min: 0,
+            max: 1
+          },
+          series: [{
+            data: [],
+            type: 'line',
+            smooth: true,
+            lineStyle: {
+              color: '#10b981',
+              width: 2
+            },
+            itemStyle: {
+              color: '#10b981'
+            },
+            areaStyle: {
+              color: {
+                type: 'linear',
+                x: 0,
+                y: 0,
+                x2: 0,
+                y2: 1,
+                colorStops: [
+                  { offset: 0, color: 'rgba(16, 185, 129, 0.3)' },
+                  { offset: 1, color: 'rgba(16, 185, 129, 0.05)' }
+                ]
+              }
+            }
+          }],
+          grid: {
+            left: '10%',
+            right: '5%',
+            bottom: '15%',
+            top: '5%',
+            containLabel: true
+          }
+        });
+        
+        // 强制调整大小以确保填满容器
+        setTimeout(() => {
+          this.ssimChartInstance.resize();
+        }, 100);
       }
     },
     
@@ -507,6 +708,7 @@ export default {
       // 定期更新预览图片（每 3 秒）
       setInterval(() => {
         if (this.isTraining && this.modelPath) {
+          console.log('[定时任务] 尝试更新预览图片...');
           this.updatePreviewImage();
         }
       }, 3000);
@@ -535,9 +737,9 @@ export default {
               return;
             }
             
-            // 2. 解析 Loss 值 - 严格匹配行首行尾
+            // 2. 解析 Loss 值 - 放宽匹配条件，不要求严格行首行尾
             // 格式：LOSS_VALUE: 0.1234567
-            const lossMatch = line.match(/^LOSS_VALUE:\s*([0-9.]+)$/);
+            const lossMatch = line.match(/LOSS_VALUE:\s*([0-9.]+)/);
             if (lossMatch && this.currentIteration > 0) {
               const loss = parseFloat(lossMatch[1]);
               console.log(`[解析] Loss=${loss}, iteration=${this.currentIteration}`);
@@ -545,9 +747,9 @@ export default {
               return;
             }
             
-            // 3. 解析 PSNR 值 - 严格匹配行首行尾
+            // 3. 解析 PSNR 值 - 放宽匹配条件，不要求严格行首行尾
             // 格式：PSNR_VALUE: 32.123456
-            const psnrMatch = line.match(/^PSNR_VALUE:\s*([0-9.]+)$/);
+            const psnrMatch = line.match(/PSNR_VALUE:\s*([0-9.]+)/);
             if (psnrMatch && this.currentIteration > 0) {
               const psnr = parseFloat(psnrMatch[1]);
               console.log(`[解析] PSNR=${psnr}, iteration=${this.currentIteration}`);
@@ -555,16 +757,58 @@ export default {
               return;
             }
             
-            // 4. 解析预览图保存路径 - 严格匹配行首
+            // 3.5 解析评估指标 (TEST)
+            // 格式：EVAL_TEST_L1: 0.025700
+            //      EVAL_TEST_PSNR: 27.366675
+            //      EVAL_TEST_SSIM: 0.871772
+            const evalTestL1Match = line.match(/EVAL_TEST_L1:\s*([0-9.]+)/);
+            const evalTestPsnrMatch = line.match(/EVAL_TEST_PSNR:\s*([0-9.]+)/);
+            const evalTestSsimMatch = line.match(/EVAL_TEST_SSIM:\s*([0-9.]+)/);
+            if ((evalTestL1Match || evalTestPsnrMatch || evalTestSsimMatch) && this.currentIteration > 0) {
+              console.log('[解析] 检测到 TEST 评估指标（每 1000 次迭代）');
+              // 这里可以选择是否要显示评估指标，暂时只记录日志
+              return;
+            }
+            
+            // 3.6 解析评估指标 (TRAIN)
+            // 格式：EVAL_TRAIN_L1: 0.015492
+            //      EVAL_TRAIN_PSNR: 31.083937
+            //      EVAL_TRAIN_SSIM: 0.922668
+            const evalTrainL1Match = line.match(/EVAL_TRAIN_L1:\s*([0-9.]+)/);
+            const evalTrainPsnrMatch = line.match(/EVAL_TRAIN_PSNR:\s*([0-9.]+)/);
+            const evalTrainSsimMatch = line.match(/EVAL_TRAIN_SSIM:\s*([0-9.]+)/);
+            if ((evalTrainL1Match || evalTrainPsnrMatch || evalTrainSsimMatch) && this.currentIteration > 0) {
+              console.log('[解析] 检测到 TRAIN 评估指标（每 1000 次迭代）');
+              // 这里可以选择是否要显示评估指标，暂时只记录日志
+              return;
+            }
+            
+            // 3.7 解析实时训练中的 PSNR 和 SSIM 值（从评估输出中提取）
+            // 格式：[ITER 7000] Evaluating test: L1 0.025700 PSNR: 27.366675 SSIM 0.871772
+            const evalMatch = line.match(/\[ITER\s+(\d+)\]\s+Evaluating\s+\w+:\s+.*PSNR:\s*([0-9.]+).*SSIM\s+([0-9.]+)/);
+            if (evalMatch) {
+              const iter = parseInt(evalMatch[1]);
+              const psnr = parseFloat(evalMatch[2]);
+              const ssim = parseFloat(evalMatch[3]);
+              console.log(`[解析] 从评估行解析 PSNR=${psnr}, SSIM=${ssim}, iteration=${iter}`);
+              // 同时更新 PSNR 和 SSIM 图表
+              this.updatePsnrData(iter, psnr);
+              this.updateSsimData(iter, ssim);
+              return;
+            }
+            
+            // 4. 解析预览图保存路径 - 放宽匹配条件
             // 格式：PREVIEW_SAVED: /path/to/render_100.png
-            const previewMatch = line.match(/^PREVIEW_SAVED:\s*(.+)$/);
+            const previewMatch = line.match(/PREVIEW_SAVED:\s*(.+)/);
             if (previewMatch) {
               const previewPath = previewMatch[1].trim();
               console.log('[解析] 预览图已保存:', previewPath);
+              console.log('[解析] 模型输出目录:', this.modelPath);
               // 立即更新预览图（延迟一点确保文件已写入）
               setTimeout(() => {
+                console.log('[定时任务] 检测到 PREVIEW_SAVED，立即更新预览图...');
                 this.updatePreviewImage();
-              }, 200);
+              }, 300);
               return;
             }
             
@@ -645,11 +889,11 @@ export default {
       
       if (data.code === 0) {
         this.needsConversion = false;
-        this.addConversionLog('✓ 数据集转换完成', 'success');
+        this.addConversionLog('数据集转换完成', 'success');
         this.addLog('数据集转换成功完成', 'success');
         alert('数据集转换完成，可以开始训练了！');
       } else {
-        this.addConversionLog(`✗ 转换失败，退出代码：${data.code}`, 'error');
+        this.addConversionLog(`转换失败，退出代码：${data.code}`, 'error');
         this.addLog(`数据集转换失败：退出代码 ${data.code}`, 'error');
         alert(`转换失败，退出代码：${data.code}`);
       }
@@ -670,8 +914,7 @@ export default {
         return;
       }
       
-      console.log(`更新 Loss 图表 - iteration: ${iterNum}, loss: ${lossValue}`);
-      
+      // 静默更新，减少日志输出以提升性能
       try {
         // 添加数据点
         const option = this.lossChartInstance.getOption();
@@ -684,16 +927,10 @@ export default {
           xData.push(iterStr);
           seriesData.push(lossValue);
           
-          console.log(`图表数据 - X 轴点数：${xData.length}, Y 轴点数：${seriesData.length}`);
-          
           this.lossChartInstance.setOption({
             xAxis: { data: xData },
             series: [{ data: seriesData }]
           });
-          
-          console.log('Loss 图表已更新');
-        } else {
-          console.log(`iteration ${iterNum} 已存在，跳过更新`);
         }
       } catch (error) {
         console.error('更新 Loss 图表失败:', error);
@@ -715,8 +952,7 @@ export default {
         return;
       }
       
-      console.log(`更新 PSNR 图表 - iteration: ${iterNum}, psnr: ${psnrValue}`);
-      
+      // 静默更新，减少日志输出以提升性能
       try {
         // 添加数据点
         const option = this.psnrChartInstance.getOption();
@@ -729,19 +965,51 @@ export default {
           xData.push(iterStr);
           seriesData.push(psnrValue);
           
-          console.log(`PSNR 图表数据 - X 轴点数：${xData.length}, Y 轴点数：${seriesData.length}`);
-          
           this.psnrChartInstance.setOption({
             xAxis: { data: xData },
             series: [{ data: seriesData }]
           });
-          
-          console.log('PSNR 图表已更新');
-        } else {
-          console.log(`iteration ${iterNum} 已存在，跳过更新`);
         }
       } catch (error) {
         console.error('更新 PSNR 图表失败:', error);
+      }
+    },
+    
+    updateSsimData(iteration, ssim) {
+      if (!this.ssimChartInstance) {
+        console.warn('SSIM 图表实例未初始化');
+        return;
+      }
+      
+      // 确保 iteration 是数字
+      const iterNum = parseInt(iteration) || 0;
+      const ssimValue = parseFloat(ssim);
+      
+      if (isNaN(ssimValue)) {
+        console.warn('SSIM 值无效:', ssim);
+        return;
+      }
+      
+      // 静默更新，减少日志输出以提升性能
+      try {
+        // 添加数据点
+        const option = this.ssimChartInstance.getOption();
+        const xData = option.xAxis && option.xAxis[0] ? (option.xAxis[0].data || []) : [];
+        const seriesData = option.series && option.series[0] ? (option.series[0].data || []) : [];
+        
+        // 避免重复
+        const iterStr = iterNum.toString();
+        if (!xData.includes(iterStr)) {
+          xData.push(iterStr);
+          seriesData.push(ssimValue);
+          
+          this.ssimChartInstance.setOption({
+            xAxis: { data: xData },
+            series: [{ data: seriesData }]
+          });
+        }
+      } catch (error) {
+        console.error('更新 SSIM 图表失败:', error);
       }
     },
     
@@ -751,20 +1019,35 @@ export default {
         return;
       }
       
+      console.log('[预览] 开始检查渲染图像，模型路径:', this.modelPath);
+      
       try {
         const result = await window.electronAPI?.getLatestRenderedImage(this.modelPath);
         
-        if (result && result.success && result.imagePath) {
-          // 添加时间戳避免缓存
-          const imageUrl = result.imagePath + '?t=' + Date.now();
+        if (result && result.success && result.imageBase64) {
+          // 使用 Base64 图片数据，不需要时间戳
+          const imageUrl = result.imageBase64;
           
-          if (this.previewImage !== imageUrl) {
+          console.log('[预览] 找到最新渲染图:', result.imagePath);
+          console.log('[预览] Base64 图片大小:', (imageUrl.length / 1024).toFixed(2), 'KB');
+          
+          // 创建 Image 对象预加载，确保图片可以正常显示
+          const img = new Image();
+          img.onload = () => {
             this.previewImage = imageUrl;
-            console.log('[预览] 图片已更新:', result.imagePath);
-          }
+            console.log('[预览] ✓ 图片加载成功并更新到界面');
+            console.log('[预览] 当前 iteration:', this.currentIteration);
+          };
+          img.onerror = (err) => {
+            console.error('[预览] ✗ 图片加载失败:', err);
+          };
+          img.src = imageUrl;
         } else {
           // 没有找到预览图是正常的，可能训练刚开始
           console.log('[预览] 未找到渲染图像（可能是训练初期）');
+          if (result?.error) {
+            console.log('[预览] 错误信息:', result.error);
+          }
         }
       } catch (error) {
         console.error('[预览] 更新失败:', error);
@@ -1518,7 +1801,7 @@ export default {
 
 .charts-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, 1fr);  /* 三列等宽 */
   gap: 1.5rem;
 }
 
@@ -1528,6 +1811,11 @@ export default {
   border-radius: 1rem;
   border: 1px solid #e2e8f0;
   box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
 }
 
 .chart-title,
