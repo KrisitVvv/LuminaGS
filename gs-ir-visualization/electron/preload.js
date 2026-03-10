@@ -69,7 +69,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('training-queue-update', (event, data) => callback(data));
   },
   // 更新项目配置（实时自动保存）
-  updateProjectConfig: (projectId, config) => ipcRenderer.invoke('update-project-config', { projectId, config })
+  updateProjectConfig: (projectId, config) => ipcRenderer.invoke('update-project-config', { projectId, config }),
+  // 更新项目阶段
+  updateProjectStage: (projectId, stage) => ipcRenderer.invoke('update-project-stage', { projectId, stage })
 });
 
 // 监听窗口状态变化

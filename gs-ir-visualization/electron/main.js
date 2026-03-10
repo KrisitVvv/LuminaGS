@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, ipcMain, dialog } = require('electron');
+﻿const { app, BrowserWindow, Menu, ipcMain, dialog } = require('electron');
 const si = require('systeminformation');
 const { spawn } = require('child_process');
 const path = require('path');
@@ -665,7 +665,18 @@ ipcMain.handle('start-baking', async (event, config) => {
       throw new Error(`Python 环境未就绪：${validation.error}`);
     }
     
-    const { modelPath, checkpoint, bound, occluRes, occlusion } = config;
+    const { modelPath, checkpoint, bound, occluRes, occlusion, projectId } = config;
+      
+    // 如果有 projectId，更新项目阶段为 baking
+    if (projectId) {
+    try {
+        await projectManager.updateProjectStage(projectId, 'baking');
+      console.log(`[Baking] 项目 ${projectId} 阶段已更新为 baking`);
+      } catch (stageError) {
+      console.error('[Baking] 更新项目阶段失败:', stageError);
+        // 不阻断后续流程
+      }
+    }
     
     // 构建命令参数
     const args = [
@@ -1050,6 +1061,28 @@ ipcMain.handle('update-project-config', async (event, configData) => {
     console.error('[IPC] 更新项目配置失败:', error);
     return { success: false, error: error.message };
   }
+});
+
+// 更新项目阶段
+ipcMain.handle('update-project-stage', async (event, data) => {
+ try {
+  const { projectId, stage } = data;
+  
+  if (!projectId) {
+   return { success: false, error: '缺少 projectId' };
+  }
+  
+  const result = await projectManager.updateProjectStage(projectId, stage);
+  
+  if (result.success) {
+ console.log(`[IPC] 项目阶段已更新：${projectId} -> ${stage}`);
+  }
+  
+  return result;
+ } catch (error) {
+  console.error('[IPC] 更新项目阶段失败:', error);
+  return { success: false, error: error.message };
+ }
 });
 
 // 确认退出应用

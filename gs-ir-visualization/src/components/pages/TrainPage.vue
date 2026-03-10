@@ -153,7 +153,7 @@
           </button>
         </div>
         
-        <div v-if="activeTab === 'training'" class="tab-content">
+        <div v-show="activeTab === 'training'" class="tab-content">
           <div class="charts-grid">
             <div class="chart-card">
               <h4 class="chart-title">损失函数 (Loss)</h4>
@@ -199,7 +199,7 @@
           </div>
         </div>
         
-        <div v-if="activeTab === 'baking'" class="tab-content">
+        <div v-show="activeTab === 'baking'" class="tab-content">
           <div class="baking-status">
             <div class="status-item">
               <span class="status-label">状态:</span>
@@ -579,6 +579,44 @@ export default {
           }
         }
         
+        // 恢复 Baking 状态（如果有）
+        if (project.bakingStatus !== undefined) {
+          this.bakingStatus = project.bakingStatus;
+          console.log('[加载项目] 恢复 baking 状态:', this.bakingStatus);
+        }
+        if (project.bakingProgress !== undefined) {
+          this.bakingProgress= project.bakingProgress;
+          console.log('[加载项目] 恢复 baking 进度:', this.bakingProgress);
+        }
+        if (project.bakingLogs && Array.isArray(project.bakingLogs)) {
+          this.bakingLogs = project.bakingLogs;
+          console.log('[加载项目] 恢复 baking 日志:', this.bakingLogs.length, '条');
+          // 延迟到下一个 tick 确保日志容器已渲染
+          this.$nextTick(() => {
+            if (this.$refs.bakingLogContainer) {
+              this.$refs.bakingLogContainer.scrollTop = this.$refs.bakingLogContainer.scrollHeight;
+            }
+          });
+        }
+        
+        if (project.bakingStatus !== undefined) {
+          this.bakingStatus = project.bakingStatus;
+          console.log('[加载项目] 恢复 baking 状态:', this.bakingStatus);
+        }
+        if (project.bakingProgress !== undefined) {
+          this.bakingProgress= project.bakingProgress;
+          console.log('[加载项目] 恢复 baking 进度:', this.bakingProgress);
+        }
+        if (project.bakingLogs && Array.isArray(project.bakingLogs)) {
+          this.bakingLogs = project.bakingLogs;
+          console.log('[加载项目] 恢复 baking 日志:', this.bakingLogs.length, '条');
+          // 延迟到下一个 tick 确保日志容器已渲染
+          this.$nextTick(() => {
+            if (this.$refs.bakingLogContainer) {
+              this.$refs.bakingLogContainer.scrollTop = this.$refs.bakingLogContainer.scrollHeight;
+            }
+          });
+        }
         // 恢复图表数据
         if (project.metrics) {
           this.lossData = project.metrics.lossHistory || [];
@@ -1231,7 +1269,15 @@ export default {
           bound: this.bound,
           occluRes: this.occluRes,
           occlusion: this.occlusion,
-          checkpoint: this.checkpoint
+          checkpoint: this.checkpoint,
+          // Baking状态信息
+          bakingStatus: this.bakingStatus,
+          bakingProgress: this.bakingProgress,
+          bakingLogs: this.bakingLogs.slice(-200).map(log => ({
+            time: log.time,
+            message: log.message,
+            type: log.type
+          }))
         };
         
         const result = await window.electronAPI?.updateProjectConfig(
@@ -1376,7 +1422,11 @@ export default {
             this.$refs.logContainer.scrollTop = this.$refs.logContainer.scrollHeight;
           }
         });
-      } else if (data.type === 'eval-update') {
+        if (this.bakingLogs.length % 10 === 0) {
+          this.triggerAutoSave();
+        }
+      } 
+      else if (data.type === 'eval-update') {
         // 处理评估更新（包含 Eval L1、PSNR、SSIM）
         console.log('[处理评估更新] 收到数据:', data.data);
               
@@ -1392,7 +1442,7 @@ export default {
     
     handleBakingOutput(data) {
       const timestamp = new Date().toLocaleTimeString();
-      
+          
       if (data.type === 'stdout' || data.type === 'stderr') {
         // 解析烘焙输出
         const lines = data.data.split('\n');
@@ -1403,25 +1453,33 @@ export default {
               message: line,
               type: data.type === 'stderr' ? 'error' : 'info'
             });
-            
+                
             // 尝试解析进度
             const progressMatch = line.match(/(\d+)%/);
             if (progressMatch) {
               this.bakingProgress = parseInt(progressMatch[1]);
+              this.triggerAutoSave();
             }
           }
         });
-        
+            
         // 滚动到底部
         this.$nextTick(() => {
           if (this.$refs.bakingLogContainer) {
             this.$refs.bakingLogContainer.scrollTop = this.$refs.bakingLogContainer.scrollHeight;
           }
         });
+            
+        // 定期保存日志（每 10 条日志保存一次）
+        if (this.bakingLogs.length % 10 === 0) {
+          this.triggerAutoSave();
+        }
       } else if (data.type === 'close') {
         this.isBaking = false;
         this.bakingStatus = data.code === 0 ? 'completed' : 'error';
         this.addBakingLog(`烘焙进程结束，退出代码：${data.code}`, 'warning');
+        // 状态变化时立即保存
+        this.saveProjectConfig();
       }
     },
     
@@ -1788,13 +1846,21 @@ export default {
         this.bakingStatus = 'running';
         this.bakingProgress = 0;
         this.bakingLogs = [];
+
+        if (this.currentProjectId) {
+          await window.electronAPI?.updateProjectStage(this.currentProjectId, 'baking');
+          console.log(`[Baking] 已更新项目阶段为 baking, projectId: ${this.currentProjectId}`);
+          await this.saveProjectConfig();
+          console.log('[Baking] 初始状态已保存');
+        }
         
         const config = {
           modelPath: this.modelPath,
           checkpoint: this.checkpoint,
           bound: this.bound,
           occluRes: this.occluRes,
-          occlusion: this.occlusion
+          occlusion: this.occlusion,
+          projectId: this.currentProjectId // 传递 projectId 给后端
         };
         
         const result = await window.electronAPI?.startBaking(config);

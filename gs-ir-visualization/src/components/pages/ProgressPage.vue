@@ -911,6 +911,7 @@ export default {
       const statusMap = {
         waiting: '等待中',
         training: '训练中',
+        baking: 'Baking 中',
         paused: '已暂停',
         completed: '已完成',
         error: '错误',
@@ -924,6 +925,7 @@ export default {
       const classMap = {
         waiting: 'status-waiting',
         training: 'status-training',
+        baking: 'status-baking',
         paused: 'status-paused',
         completed: 'status-completed',
         error: 'status-error',
@@ -1330,6 +1332,11 @@ export default {
 .status-training {
   background-color: #dbeafe;
   color: #1e40af;
+}
+
+.status-baking {
+  background-color: #ffedd5;
+  color: #9a3412;
 }
 
 .status-paused {

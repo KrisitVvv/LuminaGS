@@ -154,6 +154,42 @@ class ProjectManager {
     }
   }
   
+  // 更新项目阶段 (baking 专用)
+  async updateProjectStage(projectId, stage) {
+ try {
+  const projectIndex = this.projects.find(p => p.projectId === projectId);
+   if (!projectIndex) {
+ console.error(`[ProjectManager] 项目不存在：${projectId}`);
+   return { success: false, error: '项目不存在' };
+  }
+  
+  // 读取配置文件
+ const configContent = await fs.readFile(projectIndex.configFile, 'utf8');
+  const projectConfig = JSON.parse(configContent);
+  
+  // 更新阶段
+ projectConfig.stage = stage;
+ projectIndex.stage = stage;
+ projectConfig.lastModified = new Date().toISOString();
+ projectIndex.lastModified = projectConfig.lastModified;
+  
+  // 保存
+ await fs.writeFile(
+  projectIndex.configFile,
+   JSON.stringify(projectConfig, null, 2),
+   'utf8'
+  );
+  
+  await this.saveProjects();
+  
+ console.log(`[ProjectManager] 项目 ${projectId} 阶段已更新为 ${stage}`);
+  return { success: true };
+ } catch (error) {
+console.error('[ProjectManager] 更新项目阶段失败:', error);
+  return { success: false, error: error.message };
+}
+  }
+  
   // 更新项目状态
   async updateProject(projectId, data) {
     try {
@@ -432,18 +468,28 @@ class ProjectManager {
       const projectConfig = JSON.parse(configContent);
       
       // 3. 合并配置（支持嵌套对象）
-      const { 
+     const { 
         projectName, outputPath, sourcePath, iterations,
         resolution, evalMode, gamma, indirect,
-        bound, occluRes, occlusion, checkpoint
+        bound, occluRes, occlusion, checkpoint,
+        // Baking状态字段
+       bakingStatus, bakingProgress, bakingLogs
       } = configUpdates;
       
       // 更新顶层字段
-      if (projectName !== undefined) projectConfig.name = projectName;
-      if (outputPath !== undefined) projectConfig.outputPath = outputPath;
-      if (sourcePath !== undefined) projectConfig.sourcePath = sourcePath;
-      if (checkpoint !== undefined) projectConfig.checkpoint = checkpoint;
-      if (iterations !== undefined) projectConfig.totalIterations = iterations;
+     if (projectName !== undefined) projectConfig.name = projectName;
+     if (outputPath !== undefined) projectConfig.outputPath = outputPath;
+     if (sourcePath !== undefined) projectConfig.sourcePath = sourcePath;
+     if (checkpoint !== undefined) projectConfig.checkpoint = checkpoint;
+     if (iterations !== undefined) projectConfig.totalIterations = iterations;
+      
+      // === 新增：更新Baking状态字段 ===
+     if (bakingStatus !== undefined) projectConfig.bakingStatus = bakingStatus;
+     if (bakingProgress !== undefined) projectConfig.bakingProgress = bakingProgress;
+     if (bakingLogs !== undefined) {
+        // 确保是数组且只保留最近的日志
+        projectConfig.bakingLogs = Array.isArray(bakingLogs) ? bakingLogs.slice(-200) : [];
+      }
       
       // 更新 config 对象
       if (resolution !== undefined) projectConfig.config.resolution = resolution;
@@ -468,8 +514,8 @@ class ProjectManager {
       
       console.log(`[ProjectManager] ✓ 项目配置已保存：${projectId}`);
       return { success: true };
-    } catch (error) {
-      console.error(`[ProjectManager] 更新项目配置失败:`, error);
+    } catch(error) {
+     console.error(`[ProjectManager] 更新项目配置失败:`, error);
       return { success: false, error: error.message };
     }
   }
