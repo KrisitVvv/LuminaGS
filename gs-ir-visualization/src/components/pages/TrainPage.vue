@@ -1270,7 +1270,22 @@ export default {
           occluRes: this.occluRes,
           occlusion: this.occlusion,
           checkpoint: this.checkpoint,
-          // Baking状态信息
+          // 训练状态信息
+         isTraining: this.isTraining,
+          currentIteration: this.currentIteration,
+          logs: this.logs.slice(-200).map(log => ({
+            time: log.time,
+            message: log.message,
+            type: log.type
+          })),
+          // 图表数据
+         metrics: {
+           lossHistory: this.lossData,
+           psnrHistory: this.psnrData,
+           ssimHistory: this.ssimData,
+         evalL1History: this.evalL1Data
+         },
+          // Baking 状态信息
           bakingStatus: this.bakingStatus,
           bakingProgress: this.bakingProgress,
           bakingLogs: this.bakingLogs.slice(-200).map(log => ({
@@ -1909,9 +1924,17 @@ export default {
         this.isTraining = true;
         this.currentIteration = 30000; // Stage2 从 30000 开始
         this.logs = [];
-        
+              
+        // 如果有 projectId，更新项目阶段并保存配置
+        if (this.currentProjectId) {
+          await window.electronAPI?.updateProjectStage(this.currentProjectId, 'stage2');
+          console.log(`[Stage2] 已更新项目阶段为 stage2, projectId: ${this.currentProjectId}`);
+          await this.saveProjectConfig();
+          console.log('[Stage2] 初始状态已保存');
+        }
+              
         // 如果用户未填写项目名称，生成默认名称
-        const finalProjectName = this.projectName.trim() || this.generateDefaultProjectName();
+       const finalProjectName = this.projectName.trim() || this.generateDefaultProjectName();
         
         const config = {
           modelPath: this.modelPath,
@@ -1922,8 +1945,9 @@ export default {
           imageSubdir: this.imageSubdir,
           gamma: this.gamma,
           indirect: this.indirect,
-          checkpoint: this.checkpoint,
-          projectName: finalProjectName // 新增：项目名称
+           checkpoint: this.checkpoint,
+          projectName: finalProjectName, // 新增：项目名称
+          projectId: this.currentProjectId // 传递 projectId 给后端
         };
         
         const result = await window.electronAPI?.startTraining(config);

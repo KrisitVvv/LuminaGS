@@ -13,11 +13,11 @@
     "projectId": "project_20260307_051_20260307_0518_ck2",
     "name": "project_20260307_0518",
     "outputPath": "E:\\GraduationProject\\Testoutput",
-    "lastModified": "2026-03-10T17:55:31.987Z",
+    "lastModified": "2026-03-11T06:06:47.471Z",
     "status": "error",
     "currentIteration": 30000,
     "configFile": "E:\\GraduationProject\\Testoutput\\.luminags\\project_20260307_051_20260307_0518_ck2.json",
-    "stage": "baking"
+    "stage": "stage2"
   },
   {
     "projectId": "project_20260307_065_20260307_0656_8vw",
@@ -48,5 +48,205 @@
     "currentIteration": 300,
     "configFile": "E:\\GraduationProject\\产出\\test\\.luminags\\project_20260307_065_20260311_0020_eys.json",
     "stage": "stage1"
+  },
+  {
+    "projectId": "Counter_20260311_0505_8xr",
+    "name": "Counter",
+    "outputPath": "E:\\GraduationProject\\Testoutput",
+    "lastModified": "2026-03-10T21:05:22.540Z",
+    "status": "waiting",
+    "currentIteration": 0,
+    "configFile": "E:\\GraduationProject\\Testoutput\\.luminags\\Counter_20260311_0505_8xr.json",
+    "stage": "stage2"
+  },
+  {
+    "projectId": "Counter_20260311_0506_sg5",
+    "name": "Counter",
+    "outputPath": "E:\\GraduationProject\\Testoutput",
+    "lastModified": "2026-03-10T21:06:11.618Z",
+    "status": "waiting",
+    "currentIteration": 0,
+    "configFile": "E:\\GraduationProject\\Testoutput\\.luminags\\Counter_20260311_0506_sg5.json",
+    "stage": "stage2"
+  },
+  {
+    "projectId": "Counter_20260311_0507_sen",
+    "name": "Counter",
+    "outputPath": "E:\\GraduationProject\\Testoutput",
+    "lastModified": "2026-03-10T21:07:01.956Z",
+    "status": "waiting",
+    "currentIteration": 0,
+    "configFile": "E:\\GraduationProject\\Testoutput\\.luminags\\Counter_20260311_0507_sen.json",
+    "stage": "stage2"
+  },
+  {
+    "projectId": "Counter_20260311_0507_fxj",
+    "name": "Counter",
+    "outputPath": "E:\\GraduationProject\\Testoutput",
+    "lastModified": "2026-03-10T21:07:57.044Z",
+    "status": "waiting",
+    "currentIteration": 0,
+    "configFile": "E:\\GraduationProject\\Testoutput\\.luminags\\Counter_20260311_0507_fxj.json",
+    "stage": "stage2"
+  },
+  {
+    "projectId": "Counter_20260311_0510_ozg",
+    "name": "Counter",
+    "outputPath": "E:\\GraduationProject\\Testoutput",
+    "lastModified": "2026-03-10T21:11:17.406Z",
+    "status": "waiting",
+    "currentIteration": 0,
+    "configFile": "E:\\GraduationProject\\Testoutput\\.luminags\\Counter_20260311_0510_ozg.json",
+    "stage": "stage2"
+  },
+  {
+    "projectId": "Counter_20260311_0521_1kw",
+    "name": "Counter",
+    "outputPath": "E:\\GraduationProject\\Testoutput",
+    "lastModified": "2026-03-10T21:22:29.990Z",
+    "status": "waiting",
+    "currentIteration": 0,
+    "configFile": "E:\\GraduationProject\\Testoutput\\.luminags\\Counter_20260311_0521_1kw.json",
+    "stage": "stage2"
+  },
+  {
+    "projectId": "Counter_20260311_0525_5w0",
+    "name": "Counter",
+    "outputPath": "E:\\GraduationProject\\Testoutput",
+    "lastModified": "2026-03-10T21:26:48.220Z",
+    "status": "waiting",
+    "currentIteration": 0,
+    "configFile": "E:\\GraduationProject\\Testoutput\\.luminags\\Counter_20260311_0525_5w0.json",
+    "stage": "stage2"
+  },
+  {
+    "projectId": "Counter_20260311_0530_z0w",
+    "name": "Counter",
+    "outputPath": "E:\\GraduationProject\\Testoutput",
+    "lastModified": "2026-03-10T21:30:52.817Z",
+    "status": "waiting",
+    "currentIteration": 0,
+    "configFile": "E:\\GraduationProject\\Testoutput\\.luminags\\Counter_20260311_0530_z0w.json",
+    "stage": "stage2"
+  },
+  {
+    "projectId": "Counter_20260311_0538_6eh",
+    "name": "Counter",
+    "outputPath": "E:\\GraduationProject\\Testoutput",
+    "lastModified": "2026-03-10T21:38:14.849Z",
+    "status": "waiting",
+    "currentIteration": 0,
+    "configFile": "E:\\GraduationProject\\Testoutput\\.luminags\\Counter_20260311_0538_6eh.json",
+    "stage": "stage2"
+  },
+  {
+    "projectId": "Counter_20260311_0539_abm",
+    "name": "Counter",
+    "outputPath": "E:\\GraduationProject\\Testoutput",
+    "lastModified": "2026-03-10T21:39:38.264Z",
+    "status": "waiting",
+    "currentIteration": 0,
+    "configFile": "E:\\GraduationProject\\Testoutput\\.luminags\\Counter_20260311_0539_abm.json",
+    "stage": "stage2"
+  },
+  {
+    "projectId": "Counter_20260311_0543_dc6",
+    "name": "Counter",
+    "outputPath": "E:\\GraduationProject\\Testoutput",
+    "lastModified": "2026-03-10T21:43:08.650Z",
+    "status": "waiting",
+    "currentIteration": 0,
+    "configFile": "E:\\GraduationProject\\Testoutput\\.luminags\\Counter_20260311_0543_dc6.json",
+    "stage": "stage2"
+  },
+  {
+    "projectId": "Counter_20260311_0546_suo",
+    "name": "Counter",
+    "outputPath": "E:\\GraduationProject\\Testoutput",
+    "lastModified": "2026-03-10T21:47:31.996Z",
+    "status": "waiting",
+    "currentIteration": 0,
+    "configFile": "E:\\GraduationProject\\Testoutput\\.luminags\\Counter_20260311_0546_suo.json",
+    "stage": "stage2"
+  },
+  {
+    "projectId": "Counter_20260311_0550_k61",
+    "name": "Counter",
+    "outputPath": "E:\\GraduationProject\\Testoutput",
+    "lastModified": "2026-03-10T21:51:16.719Z",
+    "status": "waiting",
+    "currentIteration": 0,
+    "configFile": "E:\\GraduationProject\\Testoutput\\.luminags\\Counter_20260311_0550_k61.json",
+    "stage": "stage2"
+  },
+  {
+    "projectId": "Counter_20260311_0554_vvi",
+    "name": "Counter",
+    "outputPath": "E:\\GraduationProject\\Testoutput",
+    "lastModified": "2026-03-10T21:55:27.940Z",
+    "status": "waiting",
+    "currentIteration": 0,
+    "configFile": "E:\\GraduationProject\\Testoutput\\.luminags\\Counter_20260311_0554_vvi.json",
+    "stage": "stage2"
+  },
+  {
+    "projectId": "Counter_20260311_0557_6u0",
+    "name": "Counter",
+    "outputPath": "E:\\GraduationProject\\Testoutput",
+    "lastModified": "2026-03-10T21:57:41.199Z",
+    "status": "waiting",
+    "currentIteration": 0,
+    "configFile": "E:\\GraduationProject\\Testoutput\\.luminags\\Counter_20260311_0557_6u0.json",
+    "stage": "stage2"
+  },
+  {
+    "projectId": "Counter_20260311_0558_7ix",
+    "name": "Counter",
+    "outputPath": "E:\\GraduationProject\\Testoutput",
+    "lastModified": "2026-03-10T21:59:56.331Z",
+    "status": "waiting",
+    "currentIteration": 0,
+    "configFile": "E:\\GraduationProject\\Testoutput\\.luminags\\Counter_20260311_0558_7ix.json",
+    "stage": "stage2"
+  },
+  {
+    "projectId": "Counter_20260311_0605_3io",
+    "name": "Counter",
+    "outputPath": "E:\\GraduationProject\\Testoutput",
+    "lastModified": "2026-03-10T22:05:33.274Z",
+    "status": "waiting",
+    "currentIteration": 0,
+    "configFile": "E:\\GraduationProject\\Testoutput\\.luminags\\Counter_20260311_0605_3io.json",
+    "stage": "stage2"
+  },
+  {
+    "projectId": "Counter_20260311_1359_wsw",
+    "name": "Counter",
+    "outputPath": "E:\\GraduationProject\\Testoutput",
+    "lastModified": "2026-03-11T05:59:33.993Z",
+    "status": "waiting",
+    "currentIteration": 0,
+    "configFile": "E:\\GraduationProject\\Testoutput\\.luminags\\Counter_20260311_1359_wsw.json",
+    "stage": "stage2"
+  },
+  {
+    "projectId": "Counter_20260311_1401_3l6",
+    "name": "Counter",
+    "outputPath": "E:\\GraduationProject\\Testoutput",
+    "lastModified": "2026-03-11T06:02:36.118Z",
+    "status": "waiting",
+    "currentIteration": 0,
+    "configFile": "E:\\GraduationProject\\Testoutput\\.luminags\\Counter_20260311_1401_3l6.json",
+    "stage": "stage2"
+  },
+  {
+    "projectId": "Counter_20260311_1406_b6n",
+    "name": "Counter",
+    "outputPath": "E:\\GraduationProject\\Testoutput",
+    "lastModified": "2026-03-11T06:08:33.321Z",
+    "status": "waiting",
+    "currentIteration": 30400,
+    "configFile": "E:\\GraduationProject\\Testoutput\\.luminags\\Counter_20260311_1406_b6n.json",
+    "stage": "stage2"
   }
 ]

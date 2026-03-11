@@ -492,17 +492,36 @@ ipcMain.handle('start-training', async (event, config) => {
       args.push('--start_checkpoint', checkpoint);
     }
     
-    console.log('启动训练进程:', envManager.pythonPath, args.join(' '));
+   console.log('启动训练进程:', envManager.pythonPath, args.join(' '));
     
     // 标记训练已激活
     isTrainingActive = true;
     
-    // 使用环境管理器运行 Python 脚本
-    trainingProcess = envManager.runPythonScript(
-      path.join(__dirname, '../../GS-IR/train.py'),
-      args,
-      { cwd: path.join(__dirname, '../../GS-IR') }
-    );
+    // 构建完整的命令：先激活 conda 环境，再执行 Python 脚本
+   const pythonScriptPath = path.join(__dirname, '../../GS-IR/train.py');
+   const cwd = path.join(__dirname, '../../GS-IR');
+    
+  if (process.platform === 'win32') {
+        // Windows: 使用 PowerShell 执行 conda activate && python train.py
+    const ninjaPath = process.env.NINJA_PATH || path.join(path.dirname(envManager.pythonPath), 'Scripts\\ninja.exe');
+    const ninjaDir = path.dirname(ninjaPath);
+    // 将 Ninja 目录添加到 PATH，并设置 NINJA_PATH 环境变量
+    const fullCommand = `conda activate gsir;$env:PATH='${ninjaDir};' + $env:PATH;$env:NINJA_PATH='${ninjaPath}'; & '${envManager.pythonPath}' '${pythonScriptPath}' ${args.join(' ')}`;
+     console.log('执行完整命令:', fullCommand);
+        console.log('Ninja 路径:', ninjaPath);
+        
+     trainingProcess = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', fullCommand], {
+         env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
+        });
+    } else {
+        // Unix/Linux/macOS: 使用 bash -c "source activate gsir && python train.py ..."
+     const fullCommand = `cd '${cwd}' && source activate gsir && '${envManager.pythonPath}' '${pythonScriptPath}' ${args.join(' ')}`;
+     console.log('执行完整命令:', fullCommand);
+        
+     trainingProcess = spawn('bash', ['-c', fullCommand], {
+         env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
+        });
+    }
     
     trainingProcess.stdout.on('data', (data) => {
       const output = data.toString();
