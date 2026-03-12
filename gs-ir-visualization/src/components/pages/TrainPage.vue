@@ -147,6 +147,7 @@
         </div>
         
         <div v-show="activeTab === 'training'" class="tab-content">
+          
           <div class="charts-grid">
             <div class="chart-card">
               <h4 class="chart-title">损失函数 (Loss)</h4>
@@ -293,6 +294,8 @@ export default {
       // 训练状态
       isTraining: false,
       isBaking: false,
+      trainingStatus: 'idle', // idle, running, completed, error
+      bakingStatus: 'idle', // idle, running, completed, error
       currentIteration: 0,
       activeTab: 'training',
       
@@ -342,7 +345,10 @@ export default {
       currentProjectId: null,
       
       // 防抖定时器
-      saveDebounceTimer: null
+      saveDebounceTimer: null,
+      
+      // 新增：加载项目标记，防止加载时触发自动保存
+      isLoadingProject: false
     }
   },
   computed: {
@@ -351,6 +357,15 @@ export default {
     },
     canStartStage2() {
       return this.checkpoint && this.checkpoint.endsWith('.pth');
+    },
+    trainingStatusText() {
+      const statusMap = {
+        idle: '未开始',
+        running: '进行中',
+        completed: '已完成',
+        error: '错误'
+      };
+      return statusMap[this.trainingStatus] || '未知';
     },
     bakingStatusText() {
       const statusMap = {
@@ -527,6 +542,10 @@ export default {
         return;
       }
       
+      // 设置加载中标记，防止触发自动保存
+      this.isLoadingProject = true;
+      console.log('[加载项目] 设置加载中标记，暂停自动保存');
+      
       // 设置当前项目 ID（用于后续自动保存）
       this.currentProjectId = projectId;
       console.log('[加载项目] 设置 currentProjectId:', projectId);
@@ -548,14 +567,14 @@ export default {
         this.projectName = project.name || '';
         this.modelPath = project.outputPath || '';
         this.sourcePath = project.sourcePath || '';
-        this.iterations = project.config?.iterations || 30000;
-        this.evalMode = project.config?.eval || true;
-        this.resolution = project.config?.resolution || 1;
-        this.gamma = project.config?.gamma || false;
-        this.indirect = project.config?.indirect || false;
-        this.bound = project.config?.bound || 1.5;
-        this.occluRes = project.config?.occluRes || 128;
-        this.occlusion = project.config?.occlusion || 0.8;
+        this.iterations = project.totalIterations || 30000;
+        this.evalMode = project.config?.evalMode ?? true;
+        this.resolution = project.config?.resolution ?? 1;
+        this.gamma = project.config?.gamma ?? false;
+        this.indirect = project.config?.indirect ?? false;
+        this.bound = project.config?.bound ?? 1.5;
+        this.occluRes = project.config?.occluRes ?? 128;
+        this.occlusion = project.config?.occlusion ?? 0.8;
         
         // 恢复检查点路径（如果有）
         if (project.checkpoint) {
@@ -650,10 +669,18 @@ export default {
         
         console.log('[加载项目] ✓ 项目配置加载完成');
         
+        // 延迟清除加载标记，确保所有状态已恢复
+        this.$nextTick(() => {
+          this.isLoadingProject = false;
+          console.log('[加载项目] 清除加载标记，恢复自动保存');
+        });
+        
       } catch (error) {
         console.error('[加载项目] 失败:', error);
         this.addLog(`加载项目失败：${error.message}`, 'error');
         alert(`恢复项目失败：${error.message}`);
+        // 即使出错也要清除标记
+        this.isLoadingProject = false;
       }
     },
     
@@ -1298,7 +1325,7 @@ export default {
           bound: Number(this.bound || 1.5),
           occluRes: Number(this.occluRes || 128),
           occlusion: Number(this.occlusion || 0.8),
-          checkpoint: String(this.checkpoint || ''),
+          checkpoint: this.checkpoint ? String(this.checkpoint) : null,
           // 训练状态信息
           isTraining: Boolean(this.isTraining),
           isBaking: Boolean(this.isBaking),
@@ -1325,7 +1352,25 @@ export default {
           }))
         };
         
-        console.log('[保存项目] 准备传输的配置数据:', JSON.stringify(config, null, 2).substring(0, 500) + '...');
+        console.log('[保存项目] ✓ 准备保存配置:', {
+          checkpoint: config.checkpoint,
+          gamma: config.gamma,
+          indirect: config.indirect,
+          resolution: config.resolution,
+          evalMode: config.evalMode,
+          bound: config.bound,
+          occluRes: config.occluRes,
+          occlusion: config.occlusion
+        });
+        
+        // 详细日志：对比当前 UI 值和要保存的值
+        console.log('[保存项目] UI 当前值:', {
+          this_checkpoint: this.checkpoint,
+          this_gamma: this.gamma,
+          this_indirect: this.indirect,
+          this_resolution: this.resolution,
+          this_evalMode: this.evalMode
+        });
         
         const result = await window.electronAPI?.updateProjectConfig(
           this.currentProjectId, 
@@ -1336,7 +1381,22 @@ export default {
           console.log(`[保存项目] ✓ 已保存 ${this.currentProjectId}`);
         } else {
           console.error('[保存项目] ✗ 保存失败:', result?.error);
-          alert('项目配置保存失败，请检查磁盘权限');
+          console.error('[保存项目] 配置数据:', {
+            projectId: this.currentProjectId,
+            checkpoint: this.checkpoint,
+            gamma: this.gamma,
+            indirect: this.indirect
+          });
+          // 更友好的错误提示
+          let errorMsg = '项目配置保存失败';
+          if (result?.error?.includes('权限') || result?.error?.includes('EACCES')) {
+            errorMsg += ' - 请检查文件权限或关闭占用该文件的程序';
+          } else if (result?.error?.includes('不存在') || result?.error?.includes('ENOENT')) {
+            errorMsg += ' - 项目目录不存在，将自动创建';
+          } else {
+            errorMsg += `: ${result?.error}`;
+          }
+          alert(errorMsg);
         }
       } catch (error) {
         console.error('[保存项目] 异常:', error);
@@ -1344,15 +1404,73 @@ export default {
       }
     },
     
-    // 创建防抖版本的保存函数（500ms）
-    triggerAutoSave() {
-      if (this.saveDebounceTimer) {
-        clearTimeout(this.saveDebounceTimer);
+    // 立即保存项目配置（无防抖延迟）
+    async triggerAutoSave() {
+      // 如果正在加载项目，不触发保存
+      if (this.isLoadingProject) {
+        console.log('[triggerAutoSave] 项目加载中，跳过保存');
+        return;
       }
       
-      this.saveDebounceTimer = setTimeout(() => {
-        this.saveProjectConfig();
-      }, 500);
+      try {
+        // 如果没有项目 ID，先创建项目
+        if (!this.currentProjectId) {
+          console.log('[triggerAutoSave] 项目不存在，创建新项目...');
+          await this.createProjectIfNeeded();
+        }
+        
+        // 如果有项目 ID，保存配置
+        if (this.currentProjectId) {
+          await this.saveProjectConfig();
+          console.log('[triggerAutoSave] ✓ 配置已保存');
+        }
+      } catch (error) {
+        console.error('[triggerAutoSave] 失败:', error);
+        // 不弹出错误提示，避免频繁打扰用户
+      }
+    },
+    
+    // 创建新项目（如果满足条件）
+    async createProjectIfNeeded() {
+      // 只有在设置了输出路径和数据集路径后才创建项目
+      if (!this.modelPath || !this.sourcePath) {
+        console.log('[createProjectIfNeeded] 缺少必要路径，跳过创建');
+        return;
+      }
+      
+      try {
+        const config = {
+          projectName: this.projectName.trim() || null,
+          outputPath: this.modelPath,
+          sourcePath: this.sourcePath,
+          stage: 'stage1',
+          totalIterations: this.iterations,
+          resolution: this.resolution,
+          evalMode: this.evalMode,
+          gamma: this.gamma,
+          indirect: this.indirect,
+          bound: this.bound,
+          occluRes: this.occluRes,
+          occlusion: this.occlusion,
+          checkpoint: this.checkpoint || null
+        };
+        
+        console.log('[createProjectIfNeeded] 创建项目配置:', config);
+        
+        const result = await window.electronAPI?.createProject(config);
+        
+        if (result?.success) {
+          this.currentProjectId = result.projectId;
+          console.log('[createProjectIfNeeded] ✓ 项目已创建:', result.projectId);
+          
+          // 创建后立即保存一次所有参数
+          await this.saveProjectConfig();
+        } else {
+          console.error('[createProjectIfNeeded] ✗ 创建失败:', result?.error);
+        }
+      } catch (error) {
+        console.error('[createProjectIfNeeded] 异常:', error);
+      }
     },
     
     handleTrainingOutput(data) {
@@ -1523,7 +1641,14 @@ export default {
         }
       } else if (data.type === 'close') {
         this.isTraining = false;
-        this.addLog(`训练进程结束，退出代码：${data.code}`, 'warning');
+        // 根据退出代码判断是正常完成还是错误
+        if (data.code === 0) {
+          this.trainingStatus = 'completed';
+          this.addLog(`训练进程正常结束，退出代码：${data.code}`, 'success');
+        } else {
+          this.trainingStatus = 'error';
+          this.addLog(`训练进程异常结束，退出代码：${data.code}`, 'error');
+        }
       }
     },
     
@@ -1945,6 +2070,23 @@ export default {
         this.addLog('开始完整训练流程 (Stage1 → Baking → Stage2)', 'success');
         this.addLog('========================================', 'info');
         
+        // 取消之前的防抖保存定时器，确保参数立即保存
+        if (this.saveDebounceTimer) {
+          clearTimeout(this.saveDebounceTimer);
+          this.saveDebounceTimer = null;
+        }
+        
+        // 如果没有项目，先创建项目（用户修改参数时应该已经创建了）
+        if (!this.currentProjectId) {
+          await this.createProjectIfNeeded();
+        }
+        
+        // 如果有项目 ID，先保存初始状态（包含当前的 gamma、indirect、checkpoint 等所有参数）
+        if (this.currentProjectId) {
+          await this.saveProjectConfig();
+          console.log('[完整流程] ✓ 初始状态已保存，gamma:', this.gamma, ', indirect:', this.indirect, ', checkpoint:', this.checkpoint);
+        }
+        
         // ========== Stage 1: 初始训练 ==========
         this.addLog('【阶段 1/3】开始 Stage1 初始训练...', 'info');
         await this.executeStage1();
@@ -1952,11 +2094,22 @@ export default {
         // 等待 Stage1 完成（通过轮询检查）
         await this.waitForStageCompletion('training');
         
+        // 检查 Stage1 是否成功完成
+        if (this.trainingStatus === 'error') {
+          throw new Error('Stage1 训练失败');
+        }
+        
         // 更新检查点路径
         const lastSlashIndex = this.modelPath.lastIndexOf('/');
         const baseDir = this.modelPath.substring(0, lastSlashIndex);
         this.checkpoint = `${baseDir}/chkpnt30000.pth`;
         this.addLog(`【阶段 1/3】✓ Stage1 完成，检查点：${this.checkpoint}`, 'success');
+        
+        // checkpoint 变动后立即保存
+        if (this.currentProjectId) {
+          await this.saveProjectConfig();
+          console.log('[完整流程] ✓ checkpoint 已保存:', this.checkpoint);
+        }
         
         // ========== Baking: 烘焙 ==========
         this.addLog('【阶段 2/3】开始 Baking 烘焙...', 'info');
@@ -1972,6 +2125,12 @@ export default {
         
         // 等待 Stage2 完成
         await this.waitForStageCompletion('training');
+        
+        // 检查 Stage2 是否成功完成
+        if (this.trainingStatus === 'error') {
+          throw new Error('Stage2 训练失败');
+        }
+        
         this.addLog('【阶段 3/3】✓ Stage2 完成', 'success');
         
         this.addLog('========================================', 'success');
@@ -1981,8 +2140,10 @@ export default {
       } catch (error) {
         console.error('完整训练流程失败:', error);
         this.addLog(`训练流程中断：${error.message}`, 'error');
+        this.addLog('请检查日志了解详情，修复问题后可继续执行剩余阶段', 'warning');
         this.isTraining = false;
         this.isBaking = false;
+        // 不自动重置 status，让用户查看错误信息
       }
     },
     
@@ -1997,10 +2158,18 @@ export default {
         eval: this.evalMode,
         resolution: this.resolution,
         imageSubdir: this.imageSubdir,
+        // Stage1 训练时使用固定参数（算法要求）
         gamma: false,
         indirect: false,
         checkpoint: null,
-        projectName: finalProjectName
+        projectName: finalProjectName,
+        // 新增：传递用户的真实参数用于保存
+        userGamma: this.gamma,
+        userIndirect: this.indirect,
+        userCheckpoint: this.checkpoint,
+        userBound: this.bound,
+        userOccluRes: this.occluRes,
+        userOcclusion: this.occlusion
       };
       
       const result = await window.electronAPI?.startTraining(config);
@@ -2010,11 +2179,21 @@ export default {
       }
       
       this.isTraining = true;
+      this.trainingStatus = 'running';
       this.currentIteration = 0;
       this.lossData = [];
       this.psnrData = [];
       this.logs = [];
       this.bakingStatus = 'idle';
+      
+      // 仅更新项目阶段，不保存配置（避免覆盖用户的原始参数设置）
+      if (this.currentProjectId) {
+        await window.electronAPI?.updateProjectStage(this.currentProjectId, 'training');
+        console.log(`[Stage1] 已更新项目阶段为 training, projectId: ${this.currentProjectId}`);
+        // 注意：不在这里调用 saveProjectConfig()，避免将 gamma=false, indirect=false 写入 JSON
+        // 用户的真实参数已经在 startFullTraining() 中保存过了
+      }
+      
       this.addLog(`Stage1 训练已启动 - 项目：${finalProjectName}`, 'success');
     },
     
@@ -2045,7 +2224,9 @@ export default {
       
       if (this.currentProjectId) {
         await window.electronAPI?.updateProjectStage(this.currentProjectId, 'baking');
+        await this.$nextTick();
         await this.saveProjectConfig();
+        console.log('[Baking] ✓ 配置已保存，checkpoint:', this.checkpoint);
       }
       
       this.addBakingLog('Baking 已启动', 'success');
@@ -2075,12 +2256,15 @@ export default {
       }
       
       this.isTraining = true;
+      this.trainingStatus = 'running';
       this.currentIteration = 30000;
       this.logs = [];
       
       if (this.currentProjectId) {
         await window.electronAPI?.updateProjectStage(this.currentProjectId, 'stage2');
+        await this.$nextTick();
         await this.saveProjectConfig();
+        console.log('[Stage2] ✓ 配置已保存，gamma:', this.gamma, ', indirect:', this.indirect, ', checkpoint:', this.checkpoint);
       }
       
       this.addLog(`Stage2 训练已启动 - 项目：${finalProjectName}`, 'success');
@@ -2093,6 +2277,9 @@ export default {
           if (stageType === 'training' && !this.isTraining) {
             clearInterval(checkInterval);
             resolve();
+          } else if (stageType === 'training' && this.trainingStatus === 'error') {
+            clearInterval(checkInterval);
+            reject(new Error('训练阶段发生错误'));
           } else if (stageType === 'baking' && this.bakingStatus === 'completed') {
             clearInterval(checkInterval);
             resolve();

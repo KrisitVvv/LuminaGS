@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, ipcMain, dialog } = require('electron');
+﻿const { app, BrowserWindow, Menu, ipcMain, dialog } = require('electron');
 const si = require('systeminformation');
 const { spawn } = require('child_process');
 const path = require('path');
@@ -266,12 +266,19 @@ ipcMain.handle('start-training', async (event, config) => {
       sourcePath, 
       iterations, 
       eval: evalMode, 
-      gamma, 
-      indirect, 
+      gamma,   // 训练时使用的参数（Stage1 时为 false）
+      indirect,  // 训练时使用的参数（Stage1 时为 false）
       checkpoint, 
       resolution, 
       imageSubdir,
-      projectName // 新增：项目名称
+      projectName,
+      // 新增：提取用户的真实参数
+      userGamma,
+      userIndirect,
+      userCheckpoint,
+      userBound,
+      userOccluRes,
+      userOcclusion
     } = config;
     
     // 创建项目（如果提供了项目名称）
@@ -282,6 +289,17 @@ ipcMain.handle('start-training', async (event, config) => {
     if (projectName && !config.checkpoint) {
       // Stage1: 创建新项目
       console.log('[Training] 创建新项目:', projectName);
+      
+      // 关键：使用用户的真实参数保存，而不是训练时的固定参数
+      const saveGamma = (userGamma !== undefined) ? userGamma : gamma;
+      const saveIndirect = (userIndirect !== undefined) ? userIndirect : indirect;
+      const saveCheckpoint = (userCheckpoint !== undefined) ? userCheckpoint : checkpoint;
+      const saveBound = (userBound !== undefined) ? userBound : 1.5;
+      const saveOccluRes = (userOccluRes !== undefined) ? userOccluRes : 128;
+      const saveOcclusion = (userOcclusion !== undefined) ? userOcclusion : 0.01;
+      
+      console.log('[Training] 参数对比 - 训练使用:', { gamma, indirect }, '| 用户选择:', { userGamma, userIndirect }, '| 最终保存:', { saveGamma, saveIndirect });
+      
       const projectResult = await projectManager.createProject({
         projectName,
         outputPath: modelPath,
@@ -290,12 +308,12 @@ ipcMain.handle('start-training', async (event, config) => {
         totalIterations: iterations,
         resolution,
         evalMode,
-        gamma,
-        indirect,
-        bound: config.bound || 1.5,
-        occluRes: config.occluRes || 128,
-        occlusion: config.occlusion || 0.01,
-        checkpoint: null
+        gamma: saveGamma,  // ✅ 使用用户的真实选择
+        indirect: saveIndirect,  // ✅ 使用用户的真实选择
+        bound: saveBound,
+        occluRes: saveOccluRes,
+        occlusion: saveOcclusion,
+        checkpoint: saveCheckpoint  // ✅ 使用用户的真实 checkpoint
       });
       
       if (projectResult.success) {

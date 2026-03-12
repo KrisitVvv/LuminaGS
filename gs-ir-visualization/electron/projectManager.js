@@ -317,11 +317,26 @@ console.error('[ProjectManager] 更新项目阶段失败:', error);
       projectIndex.lastModified = projectConfig.lastModified;
       
       // 保存回文件
-      await fs.writeFile(
-        projectIndex.configFile,
-        JSON.stringify(projectConfig, null, 2),
-        'utf8'
-      );
+      console.log(`[ProjectManager] 开始写入项目配置：${projectIndex.configFile}`);
+      try {
+        const content = JSON.stringify(projectConfig, null, 2);
+        await fs.writeFile(
+          projectIndex.configFile,
+          content,
+          'utf8'
+        );
+        console.log(`[ProjectManager] ✓ 项目配置已更新：${projectIndex.configFile}`);
+        
+        // 验证写入的文件是否有效
+        await fs.access(projectIndex.configFile);
+        const verifyContent = await fs.readFile(projectIndex.configFile, 'utf8');
+        JSON.parse(verifyContent); // 如果能解析成功说明文件完好
+        console.log(`[ProjectManager] ✓ 文件验证通过`);
+      } catch (writeError) {
+        console.error(`[ProjectManager] 写入项目配置失败：${writeError.message}`);
+        console.error(`[ProjectManager] 错误堆栈:`, writeError.stack);
+        throw writeError;
+      }
       
       // 保存全局索引
       await this.saveProjects();
@@ -341,14 +356,20 @@ console.error('[ProjectManager] 更新项目阶段失败:', error);
   // 加载单个项目详情
   async loadProject(projectId) {
     try {
+      console.log(`[ProjectManager] 开始加载项目：${projectId}`);
       const projectIndex = this.projects.find(p => p.projectId === projectId);
       if (!projectIndex) {
+        console.error(`[ProjectManager] 项目不存在：${projectId}`);
         return { success: false, error: '项目不存在' };
       }
+      
+      console.log(`[ProjectManager] 找到项目索引，配置文件路径：${projectIndex.configFile}`);
       
       // 读取详细配置
       const configContent = await fs.readFile(projectIndex.configFile, 'utf8');
       const projectConfig = JSON.parse(configContent);
+      
+      console.log(`[ProjectManager] ✓ 项目加载成功：${projectId}`);
       
       return {
         success: true,
@@ -456,6 +477,9 @@ console.error('[ProjectManager] 更新项目阶段失败:', error);
   // 更新项目配置（用于实时自动保存）
   async updateProjectConfig(projectId, configUpdates) {
     try {
+      console.log(`[ProjectManager] 开始更新项目配置：${projectId}`);
+      console.log(`[ProjectManager] 更新内容:`, JSON.stringify(configUpdates, null, 2));
+      
       // 1. 查找项目
       const projectIndex = this.projects.find(p => p.projectId === projectId);
       if (!projectIndex) {
@@ -463,9 +487,13 @@ console.error('[ProjectManager] 更新项目阶段失败:', error);
         return { success: false, error: '项目不存在' };
       }
       
+      console.log(`[ProjectManager] 找到项目，配置文件路径：${projectIndex.configFile}`);
+      
       // 2. 读取配置文件
       const configContent = await fs.readFile(projectIndex.configFile, 'utf8');
       const projectConfig = JSON.parse(configContent);
+      
+      console.log(`[ProjectManager] 原始配置:`, JSON.stringify(projectConfig.config, null, 2));
       
       // 3. 合并配置（支持嵌套对象）
      const { 
@@ -533,22 +561,28 @@ console.error('[ProjectManager] 更新项目阶段失败:', error);
       projectConfig.lastModified = new Date().toISOString();
       projectIndex.lastModified = projectConfig.lastModified;
       
-      // 5. 原子写入：先写临时文件，再重命名
-      const tempFile = projectIndex.configFile + '.tmp';
-      await fs.writeFile(tempFile, JSON.stringify(projectConfig, null, 2), 'utf8');
-      
-      // 在 Windows 上，如果目标文件已存在，rename 可能会失败
-      // 先删除旧文件再重命名
+      // 5. 安全写入：直接覆盖原文件（避免原子写入导致文件瞬间消失）
+      console.log(`[ProjectManager] 开始写入配置文件：${projectIndex.configFile}`);
       try {
+        const content = JSON.stringify(projectConfig, null, 2);
+        // 使用同步写入确保数据立即持久化
+        await fs.writeFile(
+          projectIndex.configFile,
+          content,
+          'utf8'
+        );
+        console.log(`[ProjectManager] ✓ 配置文件已更新：${projectIndex.configFile}`);
+        
+        // 验证文件是否存在且格式正确
         await fs.access(projectIndex.configFile);
-        // 文件存在，先删除
-        await fs.unlink(projectIndex.configFile);
-      } catch (err) {
-        // 文件不存在是正常的，忽略错误
+        const verifyContent = await fs.readFile(projectIndex.configFile, 'utf8');
+        JSON.parse(verifyContent); // 验证 JSON 格式
+        console.log(`[ProjectManager] ✓ 文件验证成功`);
+      } catch (writeError) {
+        console.error(`[ProjectManager] 写入配置文件失败：${writeError.message}`);
+        console.error(`[ProjectManager] 错误堆栈:`, writeError.stack);
+        throw writeError;
       }
-      
-      // 重命名临时文件到目标文件
-      await fs.rename(tempFile, projectIndex.configFile);
       
       // 6. 更新全局索引
       await this.saveProjects();
