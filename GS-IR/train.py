@@ -375,7 +375,8 @@ def training(
                 progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{7}f}"})
                 progress_bar.update(10)
                         
-                # 每 100 次迭代输出 Loss 和预览图（用于 GUI 绘图）
+                # 每 100 次迭代输出 Loss（用于 GUI 绘图）
+                # 每 1000 次迭代会自动触发 training_report 进行评估
                 if iteration % 100 == 0:
                     # 格式化输出，确保前端能正确解析
                     loss_str = f"{ema_loss_for_log:.7f}"
@@ -419,10 +420,8 @@ def training(
                     sys.stdout.write(f"TRAINING_STATE_UPDATE: {json.dumps(state_update)}\n")
                     sys.stdout.flush()  # 立即刷新缓冲区
                     
-                    # 每 100 次迭代输出评估指标（test 和 train）
-                    if iteration % 1000 == 0 and (iteration < 30000 or iteration in testing_iterations):
-                        # 临时执行一次评估并输出结果
-                        pass  # 评估逻辑在下面 training_report 中
+                    # 每 1000 次迭代自动触发 training_report 进行评估（包括 Stage1 和 Stage2）
+                    # 无需额外判断，training_report 函数会处理
                             
             if iteration == opt.iterations:
                 progress_bar.close()
@@ -551,7 +550,8 @@ def training_report(
         tb_writer.add_scalar("iter_time", elapsed, iteration)
 
     # Report test and samples of training set
-    if iteration in testing_iterations or (iteration % 1000 == 0 and iteration < 30000):
+    # 每 1000 次迭代都进行评估（包括 Stage1 和 Stage2）
+    if iteration in testing_iterations or iteration % 1000 == 0:
         torch.cuda.empty_cache()
         validation_configs = (
             {"name": "test", "cameras": scene.getTestCameras()},
