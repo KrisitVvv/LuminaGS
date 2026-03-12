@@ -41,6 +41,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 文件和目录选择
   selectDirectory: () => ipcRenderer.invoke('select-directory'),
   selectFile: (options) => ipcRenderer.invoke('select-file', options),
+  // ✅ 新增：检查文件夹是否为空
+  checkFolderEmpty: (folderPath) => ipcRenderer.invoke('check-folder-empty', folderPath),
   // 数据集管理
   checkDatasetFormat: (sourcePath) => ipcRenderer.invoke('check-dataset-format', sourcePath),
   convertDataset: (config) => ipcRenderer.invoke('convert-dataset', config),

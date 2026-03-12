@@ -1,4 +1,4 @@
-﻿const { app, BrowserWindow, Menu, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, dialog } = require('electron');
 const si = require('systeminformation');
 const { spawn } = require('child_process');
 const path = require('path');
@@ -141,6 +141,41 @@ ipcMain.handle('select-directory', async (event) => {
   }
 });
 
+// 检查文件夹是否为空
+ipcMain.handle('check-folder-empty', async (event, folderPath) => {
+  try {
+    if (!folderPath) {
+      return { success: false, error: '文件夹路径为空' };
+    }
+    
+    // 检查路径是否存在
+    try {
+      await fs.access(folderPath);
+    } catch (err) {
+      // 路径不存在，认为是空的
+      return { success: true, isEmpty: true, exists: false, fileCount: 0 };
+    }
+    
+    // 读取文件夹内容
+    const files = await fs.readdir(folderPath);
+    const fileCount = files.length;
+    const isEmpty = fileCount === 0;
+    
+    console.log(`[FolderCheck] 路径：${folderPath}, 存在：true, 文件数：${fileCount}, 空：${isEmpty}`);
+    
+    return {
+      success: true,
+      exists: true,
+      isEmpty: isEmpty,
+      fileCount: fileCount,
+      files: files.slice(0, 10) // 只返回前 10 个文件名用于提示
+    };
+  } catch (error) {
+    console.error('[FolderCheck] 检查失败:', error);
+    return { success: false, error: error.message };
+  }
+});
+
 ipcMain.handle('select-file', async (event, options = {}) => {
   try {
     if (!mainWindow) {
@@ -226,12 +261,6 @@ ipcMain.handle('set-selected-gpu-index', async (event, index) => {
 // 训练相关 IPC 处理
 ipcMain.handle('start-training', async (event, config) => {
   try {
-    // 检查环境是否就绪
-    const validation = await envManager.validateEnvironment();
-    if (!validation.valid) {
-      throw new Error(`Python 环境未就绪：${validation.error}`);
-    }
-    
     const { 
       modelPath, 
       sourcePath, 
@@ -246,15 +275,18 @@ ipcMain.handle('start-training', async (event, config) => {
     } = config;
     
     // 创建项目（如果提供了项目名称）
-    let projectId = null;
+    // 注意：如果是 Stage2（有 checkpoint），不创建新项目，而是更新现有项目
+    let projectId = config.projectId || null;
     let projectConfigFile = null;
-    if (projectName) {
-      console.log('[Training] 创建项目:', projectName);
+    
+    if (projectName && !config.checkpoint) {
+      // Stage1: 创建新项目
+      console.log('[Training] 创建新项目:', projectName);
       const projectResult = await projectManager.createProject({
         projectName,
         outputPath: modelPath,
         sourcePath,
-        stage: checkpoint ? 'stage2' : 'stage1',
+        stage: 'stage1',
         totalIterations: iterations,
         resolution,
         evalMode,
@@ -263,7 +295,7 @@ ipcMain.handle('start-training', async (event, config) => {
         bound: config.bound || 1.5,
         occluRes: config.occluRes || 128,
         occlusion: config.occlusion || 0.01,
-        checkpoint  // 新增：传递 checkpoint 参数
+        checkpoint: null
       });
       
       if (projectResult.success) {
@@ -273,6 +305,16 @@ ipcMain.handle('start-training', async (event, config) => {
         console.log('[Training] 项目创建成功:', projectId);
       } else {
         console.warn('[Training] 项目创建失败，继续训练:', projectResult.error);
+      }
+    } else if (projectId && config.checkpoint) {
+      // Stage2: 更新现有项目阶段为 stage2
+      console.log('[Training] Stage2 训练，更新现有项目:', projectId);
+      try {
+        await projectManager.updateProjectStage(projectId, 'stage2');
+        console.log('[Training] 项目阶段已更新为 stage2');
+        currentTrainingProjectId = projectId;
+      } catch (error) {
+        console.warn('[Training] 更新项目阶段失败:', error);
       }
     }
     
@@ -308,32 +350,6 @@ ipcMain.handle('start-training', async (event, config) => {
       };
     }
         
-    // 检查输出目录是否为空
-    try {
-      const dirExists = await fs.access(modelPath).then(() => true).catch(() => false);
-      if (dirExists) {
-        const files = await fs.readdir(modelPath);
-        if (files.length > 0) {
-          // 输出目录非空，需要用户确认
-          const result = await dialog.showMessageBox(mainWindow, {
-            type: 'warning',
-            buttons: ['继续训练', '取消'],
-            defaultId: 1,
-            title: '输出目录非空',
-            message: `输出目录 "${modelPath}" 非空（包含 ${files.length} 个文件）。`,
-            detail: '继续训练可能会覆盖现有文件。是否继续？',
-          });
-          
-          if (result.response !== 0) {
-            return { success: false, error: '用户取消了训练' };
-          }
-        }
-      }
-    } catch (err) {
-      // 目录不存在是正常的，不需要处理
-      console.log('输出目录不存在，将创建新目录');
-    }
-    
     // 检查数据集格式是否需要转换
     mainWindow.webContents.send('training-output', { 
       type: 'stdout', 
@@ -353,7 +369,7 @@ ipcMain.handle('start-training', async (event, config) => {
       needsConversion = true;
       mainWindow.webContents.send('training-output', { 
         type: 'stdout', 
-        data: '⚠ 需要运行 convert.py 进行数据集转换\n' 
+        data: '需要运行 convert.py 进行数据集转换\n' 
       });
       
       mainWindow.webContents.send('training-output', { 
@@ -678,12 +694,6 @@ ipcMain.handle('start-training', async (event, config) => {
 
 ipcMain.handle('start-baking', async (event, config) => {
   try {
-    // 检查环境是否就绪
-    const validation = await envManager.validateEnvironment();
-    if (!validation.valid) {
-      throw new Error(`Python 环境未就绪：${validation.error}`);
-    }
-    
     const { modelPath, checkpoint, bound, occluRes, occlusion, projectId } = config;
       
     // 如果有 projectId，更新项目阶段为 baking

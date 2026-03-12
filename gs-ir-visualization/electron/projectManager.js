@@ -472,19 +472,48 @@ console.error('[ProjectManager] 更新项目阶段失败:', error);
         projectName, outputPath, sourcePath, iterations,
         resolution, evalMode, gamma, indirect,
         bound, occluRes, occlusion, checkpoint,
-        // Baking状态字段
-       bakingStatus, bakingProgress, bakingLogs
+        // Baking 状态字段
+       bakingStatus, bakingProgress, bakingLogs,
+       // 训练状态字段
+       isTraining, isBaking, currentIteration
       } = configUpdates;
-      
+           
       // 更新顶层字段
      if (projectName !== undefined) projectConfig.name = projectName;
      if (outputPath !== undefined) projectConfig.outputPath = outputPath;
      if (sourcePath !== undefined) projectConfig.sourcePath = sourcePath;
      if (checkpoint !== undefined) projectConfig.checkpoint = checkpoint;
      if (iterations !== undefined) projectConfig.totalIterations = iterations;
-      
-      // === 新增：更新Baking状态字段 ===
-     if (bakingStatus !== undefined) projectConfig.bakingStatus = bakingStatus;
+           
+      // 更新训练状态
+      if (isTraining !== undefined) {
+        projectConfig.status = isTraining ? 'training' : projectConfig.status;
+      }
+      if (isBaking !== undefined) {
+        // isBaking 为 true 时，设置 baking 状态和阶段
+        if (isBaking) {
+          projectConfig.status = 'baking';
+          projectConfig.stage = 'baking';
+          projectIndex.stage = 'baking';
+          if (!projectConfig.bakingStatus || projectConfig.bakingStatus === 'idle') {
+            projectConfig.bakingStatus = 'running';
+          }
+        }
+      }
+      if (currentIteration !== undefined) {
+        projectConfig.currentIteration = currentIteration;
+        projectIndex.currentIteration = currentIteration;
+      }
+           
+      // 更新 Baking 状态字段
+     if (bakingStatus !== undefined) {
+        projectConfig.bakingStatus = bakingStatus;
+        // 如果 baking 状态是 running，更新项目阶段
+        if (bakingStatus === 'running') {
+          projectConfig.stage = 'baking';
+          projectIndex.stage = 'baking';
+        }
+      }
      if (bakingProgress !== undefined) projectConfig.bakingProgress = bakingProgress;
      if (bakingLogs !== undefined) {
         // 确保是数组且只保留最近的日志
@@ -507,12 +536,24 @@ console.error('[ProjectManager] 更新项目阶段失败:', error);
       // 5. 原子写入：先写临时文件，再重命名
       const tempFile = projectIndex.configFile + '.tmp';
       await fs.writeFile(tempFile, JSON.stringify(projectConfig, null, 2), 'utf8');
+      
+      // 在 Windows 上，如果目标文件已存在，rename 可能会失败
+      // 先删除旧文件再重命名
+      try {
+        await fs.access(projectIndex.configFile);
+        // 文件存在，先删除
+        await fs.unlink(projectIndex.configFile);
+      } catch (err) {
+        // 文件不存在是正常的，忽略错误
+      }
+      
+      // 重命名临时文件到目标文件
       await fs.rename(tempFile, projectIndex.configFile);
       
       // 6. 更新全局索引
       await this.saveProjects();
       
-      console.log(`[ProjectManager] ✓ 项目配置已保存：${projectId}`);
+      console.log(`[ProjectManager] 项目配置已保存：${projectId}`);
       return { success: true };
     } catch(error) {
      console.error(`[ProjectManager] 更新项目配置失败:`, error);

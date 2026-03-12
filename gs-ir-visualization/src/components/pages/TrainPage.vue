@@ -100,16 +100,9 @@
           </div>
           
           <div class="actions-section">
-            <button class="start-btn" @click="startStage1" :disabled="isTraining">
-              <span class="iconify" data-icon="solar:play-bold"></span> 开始 Stage1
-            </button>
-            
-            <button class="baking-btn" @click="startBaking" :disabled="isBaking || !canStartBaking">
-              <span class="iconify" data-icon="solar:cookie-linear"></span> 开始 Baking
-            </button>
-            
-            <button class="start-btn stage2-btn" @click="startStage2" :disabled="isTraining || !canStartStage2">
-              <span class="iconify" data-icon="solar:play-bold"></span> 开始 Stage2
+            <button class="start-full-btn" @click="startFullTraining" :disabled="isTraining || isBaking">
+              <span class="iconify" data-icon="solar:play-bold"></span> 
+              {{ isTraining || isBaking ? '训练中...' : '开始训练' }}
             </button>
             
             <div class="control-buttons">
@@ -579,32 +572,24 @@ export default {
           }
         }
         
-        // 恢复 Baking 状态（如果有）
-        if (project.bakingStatus !== undefined) {
-          this.bakingStatus = project.bakingStatus;
-          console.log('[加载项目] 恢复 baking 状态:', this.bakingStatus);
+        // 恢复训练状态
+        if (project.status === 'training') {
+          this.isTraining = true;
+          console.log('[加载项目] 恢复训练状态：isTraining = true');
         }
-        if (project.bakingProgress !== undefined) {
-          this.bakingProgress= project.bakingProgress;
-          console.log('[加载项目] 恢复 baking 进度:', this.bakingProgress);
-        }
-        if (project.bakingLogs && Array.isArray(project.bakingLogs)) {
-          this.bakingLogs = project.bakingLogs;
-          console.log('[加载项目] 恢复 baking 日志:', this.bakingLogs.length, '条');
-          // 延迟到下一个 tick 确保日志容器已渲染
-          this.$nextTick(() => {
-            if (this.$refs.bakingLogContainer) {
-              this.$refs.bakingLogContainer.scrollTop = this.$refs.bakingLogContainer.scrollHeight;
-            }
-          });
+        if (project.stage === 'baking' || project.bakingStatus === 'running') {
+          this.isBaking = true;
+          this.bakingStatus = 'running';
+          console.log('[加载项目] 恢复烘焙状态：isBaking = true, bakingStatus = running');
         }
         
-        if (project.bakingStatus !== undefined) {
+        // 恢复 Baking 状态（如果有）
+        if (project.bakingStatus !== undefined && project.bakingStatus !== 'running') {
           this.bakingStatus = project.bakingStatus;
           console.log('[加载项目] 恢复 baking 状态:', this.bakingStatus);
         }
         if (project.bakingProgress !== undefined) {
-          this.bakingProgress= project.bakingProgress;
+          this.bakingProgress = project.bakingProgress;
           console.log('[加载项目] 恢复 baking 进度:', this.bakingProgress);
         }
         if (project.bakingLogs && Array.isArray(project.bakingLogs)) {
@@ -1257,43 +1242,90 @@ export default {
       }
       
       try {
+        // 创建纯 JSON 对象，避免 Vue 响应式代理和 ECharts 特殊对象
+        const safeClone = (obj) => {
+          if (obj === null || typeof obj !== 'object') {
+            return obj;
+          }
+          if (Array.isArray(obj)) {
+            return obj.map(item => safeClone(item));
+          }
+          const cloned = {};
+          for (const key in obj) {
+            if (obj.hasOwnProperty(key)) {
+              const value = obj[key];
+              // 跳过函数、undefined 和特殊对象
+              if (typeof value === 'function' || typeof value === 'undefined') {
+                continue;
+              }
+              // 只保留可序列化的类型
+              if (typeof value === 'string' || 
+                  typeof value === 'number' || 
+                  typeof value === 'boolean' || 
+                  value === null || 
+                  Array.isArray(value) || 
+                  (typeof value === 'object' && value.constructor === Object)) {
+                cloned[key] = safeClone(value);
+              }
+            }
+          }
+          return cloned;
+        };
+        
+        // 提取并清理图表数据 (只保留基本类型)
+        const cleanChartData = (data) => {
+          return data.map(item => {
+            if (typeof item === 'object' && item !== null) {
+              // 如果是对象，只保留 iteration 和 value 字段
+              return {
+                iteration: Number(item.iteration || item.iter || 0),
+                value: Number(item.value || item.loss || item.psnr || item.ssim || item.evalL1 || 0)
+              };
+            }
+            return item;
+          });
+        };
+        
         const config = {
-          projectName: this.projectName,
-          outputPath: this.modelPath,
-          sourcePath: this.sourcePath,
-          iterations: this.iterations,
-          resolution: this.resolution,
-          evalMode: this.evalMode,
-          gamma: this.gamma,
-          indirect: this.indirect,
-          bound: this.bound,
-          occluRes: this.occluRes,
-          occlusion: this.occlusion,
-          checkpoint: this.checkpoint,
+          projectName: String(this.projectName || ''),
+          outputPath: String(this.modelPath || ''),
+          sourcePath: String(this.sourcePath || ''),
+          iterations: Number(this.iterations || 30000),
+          resolution: Number(this.resolution || 1),
+          evalMode: Boolean(this.evalMode),
+          gamma: Boolean(this.gamma),
+          indirect: Boolean(this.indirect),
+          bound: Number(this.bound || 1.5),
+          occluRes: Number(this.occluRes || 128),
+          occlusion: Number(this.occlusion || 0.8),
+          checkpoint: String(this.checkpoint || ''),
           // 训练状态信息
-         isTraining: this.isTraining,
-          currentIteration: this.currentIteration,
+          isTraining: Boolean(this.isTraining),
+          isBaking: Boolean(this.isBaking),
+          currentIteration: Number(this.currentIteration || 0),
           logs: this.logs.slice(-200).map(log => ({
-            time: log.time,
-            message: log.message,
-            type: log.type
+            time: String(log.time || ''),
+            message: String(log.message || ''),
+            type: String(log.type || 'info')
           })),
-          // 图表数据
-         metrics: {
-           lossHistory: this.lossData,
-           psnrHistory: this.psnrData,
-           ssimHistory: this.ssimData,
-         evalL1History: this.evalL1Data
-         },
+          // 图表数据 - 确保是纯数组
+          metrics: safeClone({
+            lossHistory: cleanChartData(this.lossData),
+            psnrHistory: cleanChartData(this.psnrData),
+            ssimHistory: cleanChartData(this.ssimData),
+            evalL1History: cleanChartData(this.evalL1Data)
+          }),
           // Baking 状态信息
-          bakingStatus: this.bakingStatus,
-          bakingProgress: this.bakingProgress,
+          bakingStatus: String(this.bakingStatus || 'idle'),
+          bakingProgress: Number(this.bakingProgress || 0),
           bakingLogs: this.bakingLogs.slice(-200).map(log => ({
-            time: log.time,
-            message: log.message,
-            type: log.type
+            time: String(log.time || ''),
+            message: String(log.message || ''),
+            type: String(log.type || 'info')
           }))
         };
+        
+        console.log('[保存项目] 准备传输的配置数据:', JSON.stringify(config, null, 2).substring(0, 500) + '...');
         
         const result = await window.electronAPI?.updateProjectConfig(
           this.currentProjectId, 
@@ -1375,7 +1407,27 @@ export default {
             const evalTestSsimMatch = line.match(/EVAL_TEST_SSIM:\s*([0-9.]+)/);
             if ((evalTestL1Match || evalTestPsnrMatch || evalTestSsimMatch) && this.currentIteration > 0) {
               console.log('[解析] 检测到 TEST 评估指标（每 1000 次迭代）');
-              // 这里可以选择是否要显示评估指标，暂时只记录日志
+              
+              // 更新 Eval L1 数据
+              if (evalTestL1Match) {
+                const evalL1 = parseFloat(evalTestL1Match[1]);
+                console.log(`[Eval L1 - TEST] 更新 - iter: ${this.currentIteration}, value: ${evalL1}`);
+                this.updateEvalL1Data(this.currentIteration, evalL1);
+              }
+              
+              // 更新 PSNR 和 SSIM 数据
+              if (evalTestPsnrMatch) {
+                const psnr = parseFloat(evalTestPsnrMatch[1]);
+                console.log(`[PSNR - TEST] 更新 - iter: ${this.currentIteration}, value: ${psnr}`);
+                this.updatePsnrData(this.currentIteration, psnr);
+              }
+              
+              if (evalTestSsimMatch) {
+                const ssim = parseFloat(evalTestSsimMatch[1]);
+                console.log(`[SSIM - TEST] 更新 - iter: ${this.currentIteration}, value: ${ssim}`);
+                this.updateSsimData(this.currentIteration, ssim);
+              }
+              
               return;
             }
             
@@ -1388,7 +1440,27 @@ export default {
             const evalTrainSsimMatch = line.match(/EVAL_TRAIN_SSIM:\s*([0-9.]+)/);
             if ((evalTrainL1Match || evalTrainPsnrMatch || evalTrainSsimMatch) && this.currentIteration > 0) {
               console.log('[解析] 检测到 TRAIN 评估指标（每 1000 次迭代）');
-              // 这里可以选择是否要显示评估指标，暂时只记录日志
+              
+              // 更新 Eval L1 数据
+              if (evalTrainL1Match) {
+                const evalL1 = parseFloat(evalTrainL1Match[1]);
+                console.log(`[Eval L1 - TRAIN] 更新 - iter: ${this.currentIteration}, value: ${evalL1}`);
+                this.updateEvalL1Data(this.currentIteration, evalL1);
+              }
+              
+              // 更新 PSNR 和 SSIM 数据
+              if (evalTrainPsnrMatch) {
+                const psnr = parseFloat(evalTrainPsnrMatch[1]);
+                console.log(`[PSNR - TRAIN] 更新 - iter: ${this.currentIteration}, value: ${psnr}`);
+                this.updatePsnrData(this.currentIteration, psnr);
+              }
+              
+              if (evalTrainSsimMatch) {
+                const ssim = parseFloat(evalTrainSsimMatch[1]);
+                console.log(`[SSIM - TRAIN] 更新 - iter: ${this.currentIteration}, value: ${ssim}`);
+                this.updateSsimData(this.currentIteration, ssim);
+              }
+              
               return;
             }
             
@@ -1775,22 +1847,6 @@ export default {
         return;
       }
       
-      // 启动前再次验证环境
-      try {
-        const envCheck = await window.electronAPI?.checkEnvironment();
-        if (!envCheck?.success || !envCheck?.valid) {
-          const errorMsg = envCheck?.error || 'Python 环境未就绪';
-          alert(`环境检查失败：${errorMsg}\n\n请先安装所需依赖后再试。`);
-          this.$router.push('/environment');
-          return;
-        }
-      } catch (error) {
-        console.error('环境检查异常:', error);
-        alert('环境检查失败，请先配置 Python 环境。');
-        this.$router.push('/environment');
-        return;
-      }
-      
       try {
         this.isTraining = true;
         this.currentIteration = 0;
@@ -1840,22 +1896,6 @@ export default {
         return;
       }
       
-      // 启动前验证环境
-      try {
-        const envCheck = await window.electronAPI?.checkEnvironment();
-        if (!envCheck?.success || !envCheck?.valid) {
-          const errorMsg = envCheck?.error || 'Python 环境未就绪';
-          alert(`环境检查失败：${errorMsg}\n\n请先安装所需依赖后再试。`);
-          this.$router.push('/environment');
-          return;
-        }
-      } catch (error) {
-        console.error('环境检查异常:', error);
-        alert('环境检查失败，请先配置 Python 环境。');
-        this.$router.push('/environment');
-        return;
-      }
-      
       try {
         this.isBaking = true;
         this.bakingStatus = 'running';
@@ -1893,6 +1933,183 @@ export default {
       }
     },
     
+    async startFullTraining() {
+      // 检查是否正在训练中
+      if (this.isTraining || this.isBaking) {
+        alert('训练正在进行中！');
+        return;
+      }
+      
+      try {
+        this.addLog('========================================', 'info');
+        this.addLog('开始完整训练流程 (Stage1 → Baking → Stage2)', 'success');
+        this.addLog('========================================', 'info');
+        
+        // ========== Stage 1: 初始训练 ==========
+        this.addLog('【阶段 1/3】开始 Stage1 初始训练...', 'info');
+        await this.executeStage1();
+        
+        // 等待 Stage1 完成（通过轮询检查）
+        await this.waitForStageCompletion('training');
+        
+        // 更新检查点路径
+        const lastSlashIndex = this.modelPath.lastIndexOf('/');
+        const baseDir = this.modelPath.substring(0, lastSlashIndex);
+        this.checkpoint = `${baseDir}/chkpnt30000.pth`;
+        this.addLog(`【阶段 1/3】✓ Stage1 完成，检查点：${this.checkpoint}`, 'success');
+        
+        // ========== Baking: 烘焙 ==========
+        this.addLog('【阶段 2/3】开始 Baking 烘焙...', 'info');
+        await this.executeBaking();
+        
+        // 等待 Baking 完成
+        await this.waitForStageCompletion('baking');
+        this.addLog('【阶段 2/3】✓ Baking 完成', 'success');
+        
+        // ========== Stage 2: 优化训练 ==========
+        this.addLog('【阶段 3/3】开始 Stage2 优化训练...', 'info');
+        await this.executeStage2();
+        
+        // 等待 Stage2 完成
+        await this.waitForStageCompletion('training');
+        this.addLog('【阶段 3/3】✓ Stage2 完成', 'success');
+        
+        this.addLog('========================================', 'success');
+        this.addLog('🎉 完整训练流程全部完成!', 'success');
+        this.addLog('========================================', 'success');
+        
+      } catch (error) {
+        console.error('完整训练流程失败:', error);
+        this.addLog(`训练流程中断：${error.message}`, 'error');
+        this.isTraining = false;
+        this.isBaking = false;
+      }
+    },
+    
+    async executeStage1() {
+      // 如果用户未填写项目名称，生成默认名称
+      const finalProjectName = this.projectName.trim() || this.generateDefaultProjectName();
+      
+      const config = {
+        modelPath: this.modelPath,
+        sourcePath: this.sourcePath,
+        iterations: this.iterations,
+        eval: this.evalMode,
+        resolution: this.resolution,
+        imageSubdir: this.imageSubdir,
+        gamma: false,
+        indirect: false,
+        checkpoint: null,
+        projectName: finalProjectName
+      };
+      
+      const result = await window.electronAPI?.startTraining(config);
+      
+      if (!result?.success) {
+        throw new Error(result?.error || '启动 Stage1 失败');
+      }
+      
+      this.isTraining = true;
+      this.currentIteration = 0;
+      this.lossData = [];
+      this.psnrData = [];
+      this.logs = [];
+      this.bakingStatus = 'idle';
+      this.addLog(`Stage1 训练已启动 - 项目：${finalProjectName}`, 'success');
+    },
+    
+    async executeBaking() {
+      if (!this.checkpoint) {
+        throw new Error('未指定检查点文件');
+      }
+      
+      const config = {
+        modelPath: this.modelPath,
+        checkpoint: this.checkpoint,
+        bound: this.bound,
+        occluRes: this.occluRes,
+        occlusion: this.occlusion,
+        projectId: this.currentProjectId
+      };
+      
+      const result = await window.electronAPI?.startBaking(config);
+      
+      if (!result?.success) {
+        throw new Error(result?.error || '启动 Baking 失败');
+      }
+      
+      this.isBaking = true;
+      this.bakingStatus = 'running';
+      this.bakingProgress = 0;
+      this.bakingLogs = [];
+      
+      if (this.currentProjectId) {
+        await window.electronAPI?.updateProjectStage(this.currentProjectId, 'baking');
+        await this.saveProjectConfig();
+      }
+      
+      this.addBakingLog('Baking 已启动', 'success');
+    },
+    
+    async executeStage2() {
+      const finalProjectName = this.projectName.trim() || this.generateDefaultProjectName();
+      
+      const config = {
+        modelPath: this.modelPath,
+        sourcePath: this.sourcePath,
+        iterations: 35000,
+        eval: this.evalMode,
+        resolution: this.resolution,
+        imageSubdir: this.imageSubdir,
+        gamma: this.gamma,
+        indirect: this.indirect,
+        checkpoint: this.checkpoint,
+        projectName: finalProjectName,
+        projectId: this.currentProjectId
+      };
+      
+      const result = await window.electronAPI?.startTraining(config);
+      
+      if (!result?.success) {
+        throw new Error(result?.error || '启动 Stage2 失败');
+      }
+      
+      this.isTraining = true;
+      this.currentIteration = 30000;
+      this.logs = [];
+      
+      if (this.currentProjectId) {
+        await window.electronAPI?.updateProjectStage(this.currentProjectId, 'stage2');
+        await this.saveProjectConfig();
+      }
+      
+      this.addLog(`Stage2 训练已启动 - 项目：${finalProjectName}`, 'success');
+    },
+    
+    async waitForStageCompletion(stageType) {
+      // 轮询检查阶段是否完成
+      return new Promise((resolve, reject) => {
+        const checkInterval = setInterval(() => {
+          if (stageType === 'training' && !this.isTraining) {
+            clearInterval(checkInterval);
+            resolve();
+          } else if (stageType === 'baking' && this.bakingStatus === 'completed') {
+            clearInterval(checkInterval);
+            resolve();
+          } else if (stageType === 'baking' && this.bakingStatus === 'error') {
+            clearInterval(checkInterval);
+            reject(new Error('Baking 阶段发生错误'));
+          }
+        }, 1000); // 每秒检查一次
+        
+        // 超时保护（最长等待 24 小时）
+        setTimeout(() => {
+          clearInterval(checkInterval);
+          reject(new Error('等待超时'));
+        }, 24 * 60 * 60 * 1000);
+      });
+    },
+    
     async startStage2() {
       if (this.isTraining) {
         alert('训练正在进行中！');
@@ -1901,22 +2118,6 @@ export default {
       
       if (!this.checkpoint) {
         alert('请指定 Stage1 的检查点文件！');
-        return;
-      }
-      
-      // 启动前验证环境
-      try {
-        const envCheck = await window.electronAPI?.checkEnvironment();
-        if (!envCheck?.success || !envCheck?.valid) {
-          const errorMsg = envCheck?.error || 'Python 环境未就绪';
-          alert(`环境检查失败：${errorMsg}\n\n请先安装所需依赖后再试。`);
-          this.$router.push('/environment');
-          return;
-        }
-      } catch (error) {
-        console.error('环境检查异常:', error);
-        alert('环境检查失败，请先配置 Python 环境。');
-        this.$router.push('/environment');
         return;
       }
       
@@ -2165,6 +2366,10 @@ export default {
               : (selectedPath.includes('\\') ? '\\chkpnt30000.pth' : '/chkpnt30000.pth');
             this.checkpoint = selectedPath + checkpointName;
             this.addLog(`输出路径已设置，检查点路径自动更新为：${this.checkpoint}`, 'info');
+            
+            // ✅ 新增：立即检查文件夹是否为空
+            await this.checkOutputFolderEmpty(selectedPath);
+            
             // 触发自动保存
             this.triggerAutoSave();
           } else if (model === 'sourcePath') {
@@ -2263,6 +2468,57 @@ export default {
       } catch (error) {
         console.error('数据集检查失败:', error);
         this.addLog(`数据集检查异常：${error.message}`, 'error');
+      }
+    },
+    
+    // ✅ 新增：检查输出文件夹是否为空
+    async checkOutputFolderEmpty(folderPath) {
+      try {
+        if (!window.electronAPI?.checkFolderEmpty) {
+          console.warn('checkFolderEmpty 方法不存在');
+          return;
+        }
+        
+        const result = await window.electronAPI.checkFolderEmpty(folderPath);
+        
+        if (result.success) {
+          if (!result.exists) {
+            // 文件夹不存在，提示将会创建
+            this.addLog(`📁 输出目录不存在，系统将在训练时自动创建：${folderPath}`, 'warning');
+          } else if (result.isEmpty) {
+            // 文件夹为空，可以安全使用
+            this.addLog(`✅ 输出目录为空，可以安全使用：${folderPath}`, 'success');
+          } else {
+            // 文件夹非空，显示警告
+            const fileCount = result.fileCount;
+            const sampleFiles = result.files || [];
+            let warningMsg = `⚠️ 输出目录非空，包含 ${fileCount} 个文件/文件夹。继续训练可能会覆盖现有文件！`;
+            
+            if (sampleFiles.length > 0) {
+              warningMsg += '\n\n部分文件:\n• ' + sampleFiles.join('\n• ');
+              if (fileCount > 10) {
+                warningMsg += `\n... 还有 ${fileCount - 10} 个文件`;
+              }
+            }
+            
+            this.addLog(warningMsg, 'warning');
+            
+            // 弹出确认对话框
+            const confirmed = confirm(`${warningMsg}\n\n是否继续使用该目录？`);
+            if (!confirmed) {
+              // 用户取消，清空路径
+              this.modelPath = '';
+              this.checkpoint = '';
+              this.addLog('已取消输出目录选择', 'info');
+            }
+          }
+        } else {
+          console.error('[FolderCheck] 检查失败:', result.error);
+          this.addLog(`检查输出目录失败：${result.error}`, 'error');
+        }
+      } catch (error) {
+        console.error('[FolderCheck] 检查异常:', error);
+        this.addLog(`检查输出目录异常：${error.message}`, 'error');
       }
     },
   }
@@ -2397,6 +2653,7 @@ export default {
   gap: 0.75rem;
 }
 
+.start-full-btn,
 .start-btn,
 .baking-btn {
   width: 100%;
@@ -2414,10 +2671,26 @@ export default {
   font-size: 0.938rem;
 }
 
+.start-full-btn:disabled,
 .start-btn:disabled,
 .baking-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.start-full-btn {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  box-shadow: 0 4px 6px rgba(102, 126, 234, 0.3);
+}
+
+.start-full-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, #764ba2 0%, #667eea 100%);
+  box-shadow: 0 6px 8px rgba(102, 126, 234, 0.4);
+  transform: translateY(-1px);
+}
+
+.start-full-btn .iconify {
+  font-size: 1.125rem;
 }
 
 .start-btn {
