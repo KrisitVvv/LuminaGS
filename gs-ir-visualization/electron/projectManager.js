@@ -482,8 +482,25 @@ console.error('[ProjectManager] 更新项目阶段失败:', error);
           const configContent = await fs.readFile(project.configFile, 'utf8');
           const projectConfig = JSON.parse(configContent);
           
-          // 检查进程是否还在运行（需要外部提供）
-          // 这里只做基本的状态检测
+          // ✅ 重要：从配置文件中同步最新状态到 projects.json
+          // 包括 status、stage、currentIteration 等字段
+          if (projectConfig.status) {
+            project.status = projectConfig.status;
+          }
+          if (projectConfig.stage) {
+            project.stage = projectConfig.stage;
+          }
+          if (projectConfig.currentIteration !== undefined) {
+            project.currentIteration = projectConfig.currentIteration;
+          }
+          if (projectConfig.lastModified) {
+            project.lastModified = projectConfig.lastModified;
+          }
+          if (projectConfig.thumbnailPath) {
+            project.thumbnailPath = projectConfig.thumbnailPath;
+          }
+          
+          console.log(`[ProjectManager] ✓ 已同步项目 ${project.projectId} 状态：${project.status}, stage: ${project.stage}`);
           
           validProjects.push(project);
         } catch (err) {
@@ -717,6 +734,55 @@ console.error('[ProjectManager] 更新项目阶段失败:', error);
       return { success: true };
     } catch(error) {
      console.error(`[ProjectManager] 更新项目配置失败:`, error);
+      return { success: false, error: error.message };
+    }
+  }
+  
+  // 检查训练是否完成（检测 chkpnt40000.pth）
+  async checkTrainingCompletion(projectId) {
+    try {
+      const projectIndex = this.projects.find(p => p.projectId === projectId);
+      if (!projectIndex) {
+        console.error(`[ProjectManager] 项目不存在：${projectId}`);
+        return { success: false, error: '项目不存在' };
+      }
+      
+      // 读取配置文件
+      const configContent = await fs.readFile(projectIndex.configFile, 'utf8');
+      const projectConfig = JSON.parse(configContent);
+      
+      const outputPath = projectConfig.outputPath;
+      const checkpointFile = path.join(outputPath, 'chkpnt40000.pth');
+      
+      // 检查文件是否存在
+      try {
+        await fs.access(checkpointFile);
+        console.log(`[ProjectManager] ✓ 检测到完成标记文件：${checkpointFile}`);
+        
+        // 更新项目状态为 completed
+        projectConfig.status = 'completed';
+        projectIndex.status = 'completed';
+        projectConfig.lastModified = new Date().toISOString();
+        projectIndex.lastModified = projectConfig.lastModified;
+        
+        // 保存回文件
+        await fs.writeFile(
+          projectIndex.configFile,
+          JSON.stringify(projectConfig, null, 2),
+          'utf8'
+        );
+        
+        await this.saveProjects();
+        
+        console.log(`[ProjectManager] ✓ 项目 ${projectId} 状态已更新为 completed`);
+        return { success: true, completed: true };
+      } catch (err) {
+        // 文件不存在
+        console.log(`[ProjectManager] 完成标记文件不存在：${checkpointFile}`);
+        return { success: true, completed: false };
+      }
+    } catch (error) {
+      console.error('[ProjectManager] 检查训练完成状态失败:', error);
       return { success: false, error: error.message };
     }
   }

@@ -1,6 +1,10 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  // 系统信息相关 API
+  getPlatform: () => ipcRenderer.invoke('get-platform'),
+  // ✅ 新增：将本地文件路径转换为可访问的 URL
+  convertFilePath: (filePath) => ipcRenderer.invoke('convert-file-path', filePath),
   minimizeWindow: () => ipcRenderer.invoke('minimize-window'),
   maximizeWindow: () => ipcRenderer.invoke('maximize-window'),
   restoreWindow: () => ipcRenderer.invoke('restore-window'),
@@ -76,6 +80,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   updateProjectConfig: (projectId, config) => ipcRenderer.invoke('update-project-config', { projectId, config }),
   // 更新项目阶段
   updateProjectStage: (projectId, stage) => ipcRenderer.invoke('update-project-stage', { projectId, stage }),
+  // ✅ 新增：检查训练是否完成
+  checkTrainingCompletion: (projectId) => ipcRenderer.invoke('check-training-completion', projectId),
+  // 监听训练完成事件
+  onTrainingCompleted: (callback) => {
+    ipcRenderer.on('training-completed', (event, data) => callback(data));
+  },
   // 删除项目输出目录
   deleteOutputDirectory: (outputPath) => ipcRenderer.invoke('delete-output-directory', outputPath),
   // 删除项目及其输出

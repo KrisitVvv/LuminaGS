@@ -1,4 +1,4 @@
-﻿const { app, BrowserWindow, Menu, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, dialog, protocol } = require('electron');
 const si = require('systeminformation');
 const { spawn } = require('child_process');
 const path = require('path');
@@ -10,8 +10,35 @@ Menu.setApplicationMenu(null);
 let mainWindow = null;
 const isPackaged = app.isPackaged;
 
+// 注册自定义协议 luma:// 用于访问本地文件
+protocol.registerSchemesAsPrivileged([{
+  scheme: 'luma',
+  privileges: {
+    standard: true,
+    secure: true,
+    supportFetchApi: true,
+    corsEnabled: false,
+    allowServiceWorkers: false,
+    bypassCSP: false,
+    stream: false
+  }
+}]);
+
 // 初始化 Python 环境管理器
 const envManager = new PythonEnvironmentManager();
+
+// ✅ 辅助函数：获取图片的 MIME 类型
+function getImageMimeType(ext) {
+  const mimeTypes = {
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
+    '.svg': 'image/svg+xml'
+  };
+  return mimeTypes[ext] || 'application/octet-stream';
+}
 
 // 将 mainWindow 暴露给全局，供环境管理模块使用
 global.mainWindow = null;
@@ -768,6 +795,42 @@ ipcMain.handle('start-baking', async (event, config) => {
       const output = data.toString();
       console.log('烘焙输出:', output);
       mainWindow.webContents.send('baking-output', { type: 'stdout', data: output });
+      
+      // ✅ 新增：解析 Baking 进度并保存状态
+      if (projectId && output) {
+        try {
+          // 解析进度百分比
+          const progressMatch = output.match(/(\d+)%/);
+          if (progressMatch) {
+            const progress = parseInt(progressMatch[1]);
+            console.log(`[Baking] 解析到进度：${progress}%`);
+            
+            // 更新项目状态
+            projectManager.updateProject(projectId, {
+              currentIteration: progress,  // 使用进度作为迭代次数
+              status: 'baking'
+            }).then(result => {
+              if (result.success) {
+                console.log('[Baking] ✓ 进度已保存');
+              } else {
+                console.warn('[Baking] 进度保存失败:', result.error);
+              }
+            });
+          }
+          
+          // 解析完成消息
+          if (output.includes('save occlusion volumes') || output.includes('occlusion_volumes.pth')) {
+            console.log('[Baking] ✓ 检测到 Baking 完成');
+            
+            // 更新项目阶段为 stage2（准备进入下一阶段）
+            projectManager.updateProjectStage(projectId, 'stage2').then(() => {
+              console.log('[Baking] ✓ 项目阶段已更新为 stage2');
+            });
+          }
+        } catch (error) {
+          console.error('[Baking] 解析输出失败:', error);
+        }
+      }
     });
     
     bakingProcess.stderr.on('data', (data) => {
@@ -779,6 +842,31 @@ ipcMain.handle('start-baking', async (event, config) => {
     bakingProcess.on('close', (code) => {
       console.log(`烘焙进程退出，代码：${code}`);
       mainWindow.webContents.send('baking-output', { type: 'close', code });
+      
+      // ✅ 新增：Baking 完成后更新项目状态
+      if (projectId) {
+        if (code === 0) {
+          // 成功完成
+          projectManager.updateProject(projectId, {
+            status: 'completed',
+            stage: 'stage2'  // 自动进入 Stage2 阶段
+          }).then(result => {
+            if (result.success) {
+              console.log('[Baking] ✓ 项目状态已更新为 completed');
+            }
+          });
+        } else {
+          // 发生错误
+          projectManager.updateProject(projectId, {
+            status: 'error'
+          }).then(result => {
+            if (result.success) {
+              console.log('[Baking] ✓ 项目状态已更新为 error');
+            }
+          });
+        }
+      }
+      
       bakingProcess = null;
     });
     
@@ -1149,6 +1237,28 @@ ipcMain.handle('update-project-stage', async (event, data) => {
   return result;
  } catch (error) {
   console.error('[IPC] 更新项目阶段失败:', error);
+  return { success: false, error: error.message };
+ }
+});
+
+// 检查训练是否完成（检测 chkpnt40000.pth）
+ipcMain.handle('check-training-completion', async (event, projectId) => {
+ try {
+  if (!projectId) {
+   return { success: false, error: '缺少 projectId' };
+  }
+  
+  const result = await projectManager.checkTrainingCompletion(projectId);
+  
+  if (result.success && result.completed) {
+   console.log(`[IPC] ✓ 检测到训练完成：${projectId}`);
+   // 通知前端项目已完成
+   mainWindow.webContents.send('training-completed', { projectId });
+  }
+  
+  return result;
+ } catch (error) {
+  console.error('[IPC] 检查训练完成状态失败:', error);
   return { success: false, error: error.message };
  }
 });
@@ -1815,6 +1925,70 @@ ipcMain.handle('get-gpu-usage', async () => {
 });
 
 app.whenReady().then(async () => {
+  // 注册 luma:// 协议处理器
+  protocol.handle('luma', async (request) => {
+    try {
+      const path = require('path');
+      const fs = require('fs');
+      
+      // 从 URL 中提取文件路径
+      // luma://E:/path/to/file.png -> E:/path/to/file.png
+      const urlPath = request.url.slice('luma://'.length);
+      
+      console.log('[Luma Protocol] 原始 URL:', request.url);
+      console.log('[Luma Protocol] 提取路径:', urlPath);
+      
+      // ✅ 关键修复：不要解码，直接使用原始路径
+      // 因为路径已经是正斜杠格式，不需要 decodeURIComponent
+      const filePath = urlPath;
+      
+      console.log('[Luma Protocol] 最终路径:', filePath);
+      
+      // 检查文件是否存在
+      if (!fs.existsSync(filePath)) {
+        console.error('[Luma Protocol] ❌ 文件不存在:', filePath);
+        // 尝试一些可能的变体
+        const alternatives = [
+          filePath.replace(/^e\//i, 'E:/'),
+          filePath.replace(/^E\//i, 'E:/'),
+          filePath.replace(/^e:/i, 'E:'),
+        ];
+        
+        for (const alt of alternatives) {
+          if (fs.existsSync(alt)) {
+            console.log('[Luma Protocol] ✓ 找到替代路径:', alt);
+            const fileContent = await fs.promises.readFile(alt);
+            const ext = path.extname(alt).toLowerCase();
+            const mimeType = getImageMimeType(ext);
+            return new Response(fileContent, {
+              headers: { 'Content-Type': mimeType }
+            });
+          }
+        }
+        
+        return new Response('File not found: ' + filePath, { status: 404 });
+      }
+      
+      // 读取文件内容
+      const fileContent = await fs.promises.readFile(filePath);
+      
+      // 根据文件扩展名确定 MIME 类型
+      const ext = path.extname(filePath).toLowerCase();
+      const mimeType = getImageMimeType(ext);
+      
+      console.log(`[Luma Protocol] ✓ 返回文件：${filePath} (${mimeType})`);
+      
+      return new Response(fileContent, {
+        headers: {
+          'Content-Type': mimeType
+        }
+      });
+    } catch (error) {
+      console.error('[Luma Protocol] ❌ 错误:', error);
+      return new Response('Internal Server Error', { status: 500 });
+    }
+  });
+  
   // 先创建窗口，正常显示主页
   createWindow();
   
@@ -2179,6 +2353,39 @@ app.on(
 );
 
 // ==================== 项目管理相关 IPC ====================
+
+// 获取操作系统平台
+ipcMain.handle('get-platform', async () => {
+  return process.platform;
+});
+
+// 将本地文件路径转换为 luma:// URL
+ipcMain.handle('convert-file-path', async (event, filePath) => {
+  try {
+    const path = require('path');
+    
+    // 规范化路径（替换反斜杠为正斜杠）
+    let normalizedPath = filePath.replace(/\\/g, '/');
+    
+    // ✅ 关键修复：确保 Windows 盘符路径正确
+    // Windows: E:\path -> E:/path -> luma://E:/path
+    // 检查是否是 Windows 绝对路径（包含盘符）
+    if (/^[A-Za-z]:/.test(filePath)) {
+      // 已经是标准格式，不需要额外处理
+      console.log(`[ConvertPath] 检测到 Windows 绝对路径：${filePath}`);
+    }
+    
+    // 转换为 luma:// URL
+    const lumaUrl = `luma://${normalizedPath}`;
+    
+    console.log(`[ConvertPath] ${filePath} -> ${lumaUrl}`);
+    
+    return { success: true, url: lumaUrl };
+  } catch (error) {
+    console.error('[ConvertPath] 转换失败:', error);
+    return { success: false, error: error.message };
+  }
+});
 
 // 获取所有项目列表
 ipcMain.handle('get-project-list', async () => {

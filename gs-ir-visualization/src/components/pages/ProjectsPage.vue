@@ -3,7 +3,7 @@
     <div class="projects-content">
       <!-- 头部区域 -->
       <div class="header-section">
-        <h2 class="page-title">所有项目 ({{ projects.length }})</h2>
+        <h2 class="page-title">所有项目 ({{ completedCount }})</h2>
         <div class="header-actions">
           <input 
             class="search-input" 
@@ -34,25 +34,50 @@
           v-for="project in filteredProjects" 
           :key="project.projectId" 
           class="project-card"
-          @click="openProject(project)"
         >
           <div class="card-image">
-            <img v-if="getProjectImage(project)" :alt="project.name" :src="getProjectImage(project)">
+            <img v-if="project.imageLoaded" :alt="project.name" :src="project.imageUrl">
             <div v-else class="image-placeholder">
               <span class="iconify" data-icon="solar:image-linear"></span>
-            </div>
-            <div class="status-badge" :class="statusClass(project.status)">
-              {{ getStatusText(project.status) }}
             </div>
           </div>
           <div class="card-content">
             <h3 class="project-name">{{ project.name }}</h3>
             <p class="project-meta">{{ formatLastModified(project.lastModified) }}</p>
             <div class="card-footer">
-              <div class="stage-badge" v-if="project.stage">
-                {{ getStageText(project.stage) }}
+              <!-- ✅ 使用更大的点击区域 -->
+              <div 
+                class="menu-icon-wrapper"
+                @mousedown.stop.prevent="showContextMenu($event, project)"
+                @click.stop.prevent="showContextMenu($event, project)"
+              >
+                <span 
+                  class="iconify menu-icon" 
+                  data-icon="solar:menu-dots-bold"
+                ></span>
               </div>
-              <span class="iconify menu-icon" data-icon="solar:menu-dots-bold"></span>
+            </div>
+          </div>
+        </div>
+        
+        <!-- ✅ 新增：上下文菜单 -->
+        <div 
+          v-if="contextMenuVisible" 
+          class="context-menu-overlay"
+          @click="hideContextMenu"
+        >
+          <div 
+            class="context-menu"
+            :style="{ top: contextMenuPosition.top + 'px', left: contextMenuPosition.left + 'px' }"
+            @click.stop
+          >
+            <div class="context-menu-item" @click.stop="renameProject(currentSelectedProject)">
+              <span class="iconify" data-icon="solar:pen-bold"></span>
+              <span>重命名项目</span>
+            </div>
+            <div class="context-menu-item danger" @click.stop="deleteProject(currentSelectedProject)">
+              <span class="iconify" data-icon="solar:trash-bin-trash-bold"></span>
+              <span>删除项目</span>
             </div>
           </div>
         </div>
@@ -68,16 +93,43 @@ export default {
     return {
       searchQuery: '',
       projects: [],
-      loading: false
+      loading: false,
+      platform: 'win32', // 默认值，会在 created 中获取真实值
+      // ✅ 新增：上下文菜单相关数据
+      contextMenuVisible: false,
+      contextMenuPosition: { top: 0, left: 0 },
+      currentSelectedProject: null
     }
   },
-  created() {
+  async created() {
+    // 获取操作系统平台
+    try {
+      this.platform = await window.electronAPI?.getPlatform() || 'win32';
+      console.log('[ProjectsPage] 操作系统平台:', this.platform);
+    } catch (error) {
+      console.error('[ProjectsPage] 获取平台失败:', error);
+    }
+    
     this.loadProjects();
   },
   computed: {
-    filteredProjects() {
-      if (!this.searchQuery) return this.projects;
+    completedCount() {
+      // ✅ 只统计已完成的项目数量
       return this.projects.filter(project => 
+        project.status === 'completed'
+      ).length;
+    },
+    
+    filteredProjects() {
+      if (!this.searchQuery) {
+        // ✅ 只显示已完成的项目
+        return this.projects.filter(project => 
+          project.status === 'completed'
+        );
+      }
+      // 搜索时也只显示已完成的项目
+      return this.projects.filter(project => 
+        project.status === 'completed' &&
         project.name.toLowerCase().includes(this.searchQuery.toLowerCase())
       );
     }
@@ -93,6 +145,20 @@ export default {
         if (result?.success && result.data) {
           this.projects = result.data;
           console.log(`[ProjectsPage] ✓ 加载了 ${this.projects.length} 个项目`);
+          
+          // ✅ 新增：详细打印每个项目的缩略图信息
+          this.projects.forEach((project, index) => {
+            console.log(`[ProjectsPage] 项目 ${index + 1}:`, {
+              projectId: project.projectId,
+              name: project.name,
+              status: project.status,
+              thumbnailPath: project.thumbnailPath || '无',
+              previewImagePath: project.previewImagePath || '无'
+            });
+          });
+          
+          // ✅ 新增：异步加载所有项目的图片 URL
+          await this.loadAllProjectImages();
         } else {
           console.error('[ProjectsPage] 加载失败:', result?.error);
           this.projects = [];
@@ -105,20 +171,79 @@ export default {
       }
     },
     
-    getProjectImage(project) {
+    // ✅ 新增：批量加载所有项目的图片 URL
+    async loadAllProjectImages() {
+      console.log('[ProjectsPage] 开始加载所有项目图片...');
+      
+      for (let i = 0; i < this.projects.length; i++) {
+        const project = this.projects[i];
+        
+        try {
+          // 尝试加载缩略图或预览图
+          const imageUrl = await this.getProjectImage(project);
+          
+          if (imageUrl) {
+            project.imageUrl = imageUrl;
+            project.imageLoaded = true;
+            console.log(`[ProjectsPage] ✓ 项目 ${i + 1} 图片加载成功：${imageUrl}`);
+          } else {
+            project.imageLoaded = false;
+            console.log(`[ProjectsPage] ⚠️ 项目 ${i + 1} 无可用图片`);
+          }
+        } catch (error) {
+          project.imageLoaded = false;
+          console.error(`[ProjectsPage] ❌ 项目 ${i + 1} 图片加载失败:`, error);
+        }
+      }
+      
+      console.log('[ProjectsPage] 所有项目图片加载完成');
+    },
+    
+    async getProjectImage(project) {
+      // ✅ 新增：首先检查 project 对象是否有 thumbnailPath 或 previewImagePath
+      console.log(`[ProjectsPage] 检查项目图片：${project.projectId}`, {
+        thumbnailPath: project.thumbnailPath,
+        previewImagePath: project.previewImagePath
+      });
+      
       // 优先使用缩略图路径
       if (project.thumbnailPath) {
-        // 将本地路径转换为可访问的 URL
-        // 注意：这里需要使用 Electron 的 file:// 协议或后端提供的 API
-        // 暂时返回 null 显示占位图
-        return null;
+        try {
+          // ✅ 使用 Electron API 转换为可访问的 URL
+          const result = await window.electronAPI?.convertFilePath(project.thumbnailPath);
+          
+          if (result?.success && result.url) {
+            console.log(`[ProjectsPage] 🖼️ 加载缩略图：${result.url}`);
+            return result.url;
+          } else {
+            console.warn(`[ProjectsPage] ⚠️ 转换缩略图路径失败：`, result?.error);
+            return null;
+          }
+        } catch (error) {
+          console.error('[ProjectsPage] ❌ 转换缩略图路径失败:', error);
+          return null;
+        }
       }
       
       // 如果没有缩略图，尝试使用预览图路径
       if (project.previewImagePath) {
-        return null;
+        try {
+          const result = await window.electronAPI?.convertFilePath(project.previewImagePath);
+          
+          if (result?.success && result.url) {
+            console.log(`[ProjectsPage] 🖼️ 加载预览图：${result.url}`);
+            return result.url;
+          } else {
+            console.warn(`[ProjectsPage] ⚠️ 转换预览图路径失败：`, result?.error);
+            return null;
+          }
+        } catch (error) {
+          console.error('[ProjectsPage] ❌ 转换预览图路径失败:', error);
+          return null;
+        }
       }
       
+      console.log(`[ProjectsPage] ℹ️ 无可用图片：${project.projectId}`);
       return null;
     },
     
@@ -186,6 +311,129 @@ export default {
         name: 'train', 
         query: { projectId: project.projectId } 
       });
+    },
+    
+    // ✅ 新增：显示上下文菜单
+    showContextMenu(event, project) {
+      console.log('[ProjectsPage] 🔴 showContextMenu 被调用！', event.type);
+      
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      
+      this.currentSelectedProject = project;
+      
+      // 计算菜单位置（确保不超出屏幕）
+      const menuWidth = 200;
+      const menuHeight = 100;
+      const rect = event.target.getBoundingClientRect();
+      
+      let top = rect.bottom + window.scrollY;
+      let left = rect.right - menuWidth + window.scrollX;
+      
+      // 检查是否超出右边界
+      if (left + menuWidth > window.innerWidth) {
+        left = window.innerWidth - menuWidth - 10;
+      }
+      
+      // 检查是否超出下边界
+      if (top + menuHeight > window.innerHeight) {
+        top = rect.top - menuHeight + window.scrollY;
+      }
+      
+      this.contextMenuPosition = { top, left };
+      this.contextMenuVisible = true;
+      
+      console.log('[ProjectsPage] ✓ 菜单已显示:', {
+        project: project.name,
+        position: { top, left }
+      });
+    },
+    
+    // ✅ 新增：隐藏上下文菜单
+    hideContextMenu() {
+      this.contextMenuVisible = false;
+      this.currentSelectedProject = null;
+    },
+    
+    // ✅ 新增：重命名项目
+    async renameProject(project) {
+      if (!project) return;
+      
+      this.hideContextMenu();
+      
+      console.log('[ProjectsPage] 重命名项目:', project.name);
+      
+      // 使用原生 prompt 进行重命名
+      const newName = prompt('请输入新的项目名称:', project.name);
+      
+      if (!newName || newName.trim() === '') {
+        console.log('[ProjectsPage] 取消重命名');
+        return;
+      }
+      
+      if (newName === project.name) {
+        console.log('[ProjectsPage] 名称未改变');
+        return;
+      }
+      
+      try {
+        // 调用 Electron API 更新项目配置
+        const result = await window.electronAPI?.updateProjectConfig(project.projectId, {
+          name: newName.trim()
+        });
+        
+        if (result?.success) {
+          console.log(`[ProjectsPage] ✓ 重命名成功：${project.name} -> ${newName}`);
+          // 更新本地数据
+          project.name = newName.trim();
+          alert(`项目重命名成功！\n新名称：${newName}`);
+        } else {
+          console.error('[ProjectsPage] ❌ 重命名失败:', result?.error);
+          alert('重命名失败：' + (result?.error || '未知错误'));
+        }
+      } catch (error) {
+        console.error('[ProjectsPage] ❌ 重命名异常:', error);
+        alert('重命名失败：' + error.message);
+      }
+    },
+    
+    // ✅ 新增：删除项目
+    async deleteProject(project) {
+      if (!project) return;
+      
+      this.hideContextMenu();
+      
+      console.log('[ProjectsPage] 删除项目:', project.name);
+      
+      // 确认删除
+      const confirmed = confirm(`确定要删除项目 "${project.name}" 吗？\n\n此操作将删除项目的输出目录，但不会删除项目配置文件。`);
+      
+      if (!confirmed) {
+        console.log('[ProjectsPage] 取消删除');
+        return;
+      }
+      
+      try {
+        // 调用 Electron API 删除项目输出
+        const result = await window.electronAPI?.deleteProjectAndOutput(project.projectId, project.outputPath);
+        
+        if (result?.success) {
+          console.log(`[ProjectsPage] ✓ 删除成功：${project.name}`);
+          // 从列表中移除该项目
+          const index = this.projects.findIndex(p => p.projectId === project.projectId);
+          if (index !== -1) {
+            this.projects.splice(index, 1);
+          }
+          alert(`项目已删除！`);
+        } else {
+          console.error('[ProjectsPage] ❌ 删除失败:', result?.error);
+          alert('删除失败：' + (result?.error || '未知错误'));
+        }
+      } catch (error) {
+        console.error('[ProjectsPage] ❌ 删除异常:', error);
+        alert('删除失败：' + error.message);
+      }
     }
   }
 }
@@ -441,7 +689,6 @@ export default {
 .project-name {
   font-weight: bold;
   color: #1e293b;
-  margin-bottom: 0.25rem;
   font-size: 1.125rem;
   flex-grow: 1;
   line-height: 1.4;
@@ -457,8 +704,9 @@ export default {
 .card-footer {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: right;
   margin-top: auto;
+
   flex-shrink: 0;
 }
 
@@ -474,5 +722,110 @@ export default {
 .menu-icon {
   color: #94a3b8;
   font-size: 1.25rem;
+  cursor: pointer;
+  padding: 0.25rem;
+  border-radius: 0.25rem;
+  transition: all 0.2s ease;
+  /* ✅ 确保可以点击 */
+  pointer-events: auto;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.menu-icon:hover {
+  background-color: #f1f5f9;
+  color: #475569;
+}
+
+.menu-icon:active {
+  background-color: #e2e8f0;
+}
+
+/* ✅ 新增：上下文菜单样式 */
+.context-menu-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 9999;
+  /* 透明背景，点击关闭菜单 */
+}
+
+/* ✅ 新增：菜单图标包装器样式 */
+.menu-icon-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.25rem;
+  cursor: pointer;
+  border-radius: 0.25rem;
+  transition: all 0.2s ease;
+  /* ✅ 确保可以点击且不被遮挡 */
+  pointer-events: auto;
+  user-select: none;
+}
+
+.menu-icon-wrapper:hover {
+  background-color: #f1f5f9;
+}
+
+.menu-icon-wrapper:active {
+  background-color: #e2e8f0;
+}
+
+.context-menu {
+  position: absolute;
+  background: white;
+  border-radius: 0.5rem;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(0, 0, 0, 0.05);
+  padding: 0.5rem;
+  min-width: 200px;
+  animation: menuFadeIn 0.15s ease-out;
+  z-index: 10000;
+}
+
+@keyframes menuFadeIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.625rem 0.75rem;
+  border-radius: 0.375rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-size: 0.875rem;
+  color: #334155;
+}
+
+.context-menu-item:hover {
+  background-color: #f1f5f9;
+}
+
+.context-menu-item .iconify {
+  font-size: 1.125rem;
+  color: #64748b;
+}
+
+.context-menu-item.danger {
+  color: #dc2626;
+}
+
+.context-menu-item.danger:hover {
+  background-color: #fef2f2;
+}
+
+.context-menu-item.danger .iconify {
+  color: #dc2626;
 }
 </style>

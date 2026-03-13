@@ -1495,6 +1495,41 @@ export default {
       }
     },
     
+    // 标记训练为完成状态（检测到 chkpnt40000.pth）
+    async markTrainingAsCompleted() {
+      if (!this.currentProjectId) {
+        console.log('[训练完成] 无 projectId，无法更新状态');
+        return;
+      }
+      
+      try {
+        console.log(`[训练完成] 准备检查项目 ${this.currentProjectId} 的完成状态...`);
+        
+        // 调用后端 API 检查并更新状态
+        const result = await window.electronAPI?.checkTrainingCompletion(this.currentProjectId);
+        
+        if (result?.success && result.completed) {
+          console.log(`[训练完成] ✓ 项目状态已更新为 completed`);
+          this.addLog('🎉 训练已完成！检测到 chkpnt40000.pth 文件', 'success');
+          
+          // 更新前端状态
+          this.isTraining = false;
+          this.trainingStatus = 'completed';
+          
+          // 通知其他组件
+          if (typeof window.electronAPI?.onTrainingCompleted === 'function') {
+            window.electronAPI.onTrainingCompleted((data) => {
+              console.log('[训练完成] 收到完成通知:', data);
+            });
+          }
+        } else {
+          console.log('[训练完成] ⚠️ 文件检测失败或未完成');
+        }
+      } catch (error) {
+        console.error('[训练完成] 更新状态失败:', error);
+      }
+    },
+    
     // 创建新项目（如果满足条件）
     async createProjectIfNeeded() {
       // 只有在设置了输出路径和数据集路径后才创建项目
@@ -1557,6 +1592,22 @@ export default {
               message: line,
               type: data.type === 'stderr' ? 'error' : 'info'
             });
+            
+            // ✅ 新增：检测 checkpoint 保存消息（chkpnt40000.pth）
+            // 格式：Saved checkpoint at iteration 40000 to: xxx/chkpnt40000.pth
+            const checkpointMatch = line.match(/Saved checkpoint at iteration (\d+) to:\s*(.+\.pth)/);
+            if (checkpointMatch) {
+              const iteration = parseInt(checkpointMatch[1]);
+              const checkpointPath = checkpointMatch[2].trim();
+              console.log(`[Checkpoint] 检测到检查点保存：iter=${iteration}, path=${checkpointPath}`);
+              
+              // 如果是 chkpnt40000.pth，标记训练完成
+              if (checkpointPath.includes('chkpnt40000.pth')) {
+                console.log('[Checkpoint] ✓ 检测到最终检查点，准备更新项目状态...');
+                this.markTrainingAsCompleted();
+              }
+              return;
+            }
             
             // 1. 解析 iteration 标记
             // 格式：=== TRAINING_ITERATION 100 ===
