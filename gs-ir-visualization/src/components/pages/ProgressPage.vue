@@ -882,8 +882,11 @@ export default {
         if (window.electronAPI?.getProjectList) {
           const result = await window.electronAPI.getProjectList();
           if (result.success) {
-            this.projectQueue = result.data || [];
-            console.log('[项目队列] 已加载', this.projectQueue.length, '个项目');
+            // 过滤掉已完成的项目，只显示正在训练或等待中的项目
+            this.projectQueue = (result.data || []).filter(project => 
+              project.status !== 'completed'
+            );
+            console.log('[项目队列] 已加载', this.projectQueue.length, '个项目（已过滤已完成）');
           }
         } else {
           console.warn('[项目队列] getProjectList API 不可用');

@@ -36,18 +36,56 @@ class ProjectManager {
     }
   }
   
-  // 保存项目列表到文件
+  // 保存项目列表到文件（带重试机制）
   async saveProjects() {
-    try {
-      await fs.writeFile(
-        this.projectsFile, 
-        JSON.stringify(this.projects, null, 2), 
-        'utf8'
-      );
-    } catch (error) {
-      console.error('[ProjectManager] 保存 projects.json 失败:', error);
-      throw error;
+    const maxRetries = 3;
+    let lastError = null;
+    
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        // 1. 先写入临时文件
+        const tempFile = this.projectsFile + '.tmp';
+        const content = JSON.stringify(this.projects, null, 2);
+        await fs.writeFile(tempFile, content, 'utf8');
+        
+        // 2. 验证临时文件
+        await fs.access(tempFile);
+        const verifyContent = await fs.readFile(tempFile, 'utf8');
+        JSON.parse(verifyContent); // 验证 JSON 格式
+        
+        // 3. 删除旧文件（如果存在）
+        try {
+          await fs.unlink(this.projectsFile);
+        } catch (err) {
+          // 文件不存在也没关系
+        }
+        
+        // 4. 重命名临时文件为正式文件（原子操作）
+        await fs.rename(tempFile, this.projectsFile);
+        
+        console.log(`[ProjectManager] ✓ projects.json 保存成功（尝试 ${attempt}/${maxRetries}）`);
+        return;
+      } catch (error) {
+        lastError = error;
+        console.warn(`[ProjectManager] ⚠ 保存失败（尝试 ${attempt}/${maxRetries}）:`, error.message);
+        
+        // 清理临时文件（如果存在）
+        try {
+          await fs.unlink(this.projectsFile + '.tmp');
+        } catch (cleanupErr) {
+          // 忽略清理错误
+        }
+        
+        // 等待一小段时间后重试
+        if (attempt < maxRetries) {
+          await new Promise(resolve => setTimeout(resolve, 100 * attempt));
+        }
+      }
     }
+    
+    // 所有重试都失败，抛出错误
+    console.error('[ProjectManager] ✗ 保存 projects.json 失败:', lastError.message);
+    throw lastError;
   }
   
   // 生成项目 ID（时间戳 + 随机数）
@@ -201,8 +239,54 @@ console.error('[ProjectManager] 更新项目阶段失败:', error);
       }
       
       // 读取项目配置文件
-      const configContent = await fs.readFile(projectIndex.configFile, 'utf8');
-      const projectConfig = JSON.parse(configContent);
+      let configContent;
+      try {
+        configContent = await fs.readFile(projectIndex.configFile, 'utf8');
+        console.log(`[ProjectManager] ✓ 成功读取配置文件：${projectIndex.configFile}`);
+      } catch (readError) {
+        console.error(`[ProjectManager] ✗ 读取配置文件失败：${projectIndex.configFile}`);
+        console.error(`[ProjectManager] 错误详情:`, readError.message);
+        throw new Error(`无法读取项目配置文件：${readError.message}`);
+      }
+      
+      // 验证 JSON 格式
+      let projectConfig;
+      try {
+        projectConfig = JSON.parse(configContent);
+        console.log(`[ProjectManager] ✓ JSON 解析成功`);
+      } catch (parseError) {
+        console.error(`[ProjectManager] ✗ JSON 解析失败`);
+        console.error(`[ProjectManager] 文件内容预览:`, configContent.substring(0, 200));
+        console.error(`[ProjectManager] 解析错误:`, parseError.message);
+        
+        // 尝试修复：提取第一个完整的 JSON 对象
+        console.log(`[ProjectManager] 尝试自动修复 JSON...`);
+        let braceCount = 0;
+        let endIndex = -1;
+        
+        for (let i = 0; i < configContent.length; i++) {
+          if (configContent[i] === '{') braceCount++;
+          if (configContent[i] === '}') braceCount--;
+          
+          if (braceCount === 0 && configContent[i] === '}') {
+            endIndex = i + 1;
+            break;
+          }
+        }
+        
+        if (endIndex !== -1) {
+          const jsonStr = configContent.substring(0, endIndex);
+          try {
+            projectConfig = JSON.parse(jsonStr);
+            console.log(`[ProjectManager] ✓ JSON 修复成功`);
+          } catch (fixError) {
+            console.error(`[ProjectManager] ✗ JSON 修复失败`);
+            throw new Error(`项目配置文件损坏且无法修复：${parseError.message}`);
+          }
+        } else {
+          throw new Error(`项目配置文件严重损坏：${parseError.message}`);
+        }
+      }
       
       // 更新数据
       const {
@@ -490,8 +574,50 @@ console.error('[ProjectManager] 更新项目阶段失败:', error);
       console.log(`[ProjectManager] 找到项目，配置文件路径：${projectIndex.configFile}`);
       
       // 2. 读取配置文件
-      const configContent = await fs.readFile(projectIndex.configFile, 'utf8');
-      const projectConfig = JSON.parse(configContent);
+      let configContent;
+      try {
+        configContent = await fs.readFile(projectIndex.configFile, 'utf8');
+        console.log(`[ProjectManager] ✓ 成功读取配置文件`);
+      } catch (readError) {
+        console.error(`[ProjectManager] ✗ 读取配置文件失败:`, readError.message);
+        throw new Error(`无法读取项目配置文件：${readError.message}`);
+      }
+      
+      // 3. 解析 JSON（带错误修复）
+      let projectConfig;
+      try {
+        projectConfig = JSON.parse(configContent);
+        console.log(`[ProjectManager] ✓ JSON 解析成功`);
+      } catch (parseError) {
+        console.error(`[ProjectManager] ✗ JSON 解析失败：${parseError.message}`);
+        console.error(`[ProjectManager] 文件内容预览:`, configContent.substring(0, 200));
+        
+        // 尝试修复
+        let braceCount = 0;
+        let endIndex = -1;
+        
+        for (let i = 0; i < configContent.length; i++) {
+          if (configContent[i] === '{') braceCount++;
+          if (configContent[i] === '}') braceCount--;
+          
+          if (braceCount === 0 && configContent[i] === '}') {
+            endIndex = i + 1;
+            break;
+          }
+        }
+        
+        if (endIndex !== -1) {
+          const jsonStr = configContent.substring(0, endIndex);
+          try {
+            projectConfig = JSON.parse(jsonStr);
+            console.log(`[ProjectManager] ✓ JSON 修复成功`);
+          } catch (fixError) {
+            throw new Error(`JSON 损坏且无法修复：${parseError.message}`);
+          }
+        } else {
+          throw new Error(`JSON 严重损坏，无法恢复：${parseError.message}`);
+        }
+      }
       
       console.log(`[ProjectManager] 原始配置:`, JSON.stringify(projectConfig.config, null, 2));
       

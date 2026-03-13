@@ -109,6 +109,30 @@
               <button class="stop-btn" @click="stopTraining" :disabled="!isTraining && !isBaking">终止</button>
             </div>
             
+            <!-- 新增：停止后的操作按钮 -->
+            <div v-if="showRetryDeleteButtons" class="retry-delete-buttons">
+              <button class="retry-btn" @click="retryTraining" :disabled="!currentProjectId">
+                <span class="iconify" data-icon="solar:refresh-linear"></span>
+                重试
+              </button>
+              <button class="delete-btn" @click="deleteProject" :disabled="!currentProjectId">
+                <span class="iconify" data-icon="solar:trash-bin-trash-linear"></span>
+                删除
+              </button>
+            </div>
+            
+            <!-- 新增：训练完成后的操作按钮 -->
+            <div v-if="showCompleteButtons" class="complete-buttons">
+              <button class="save-btn" @click="saveToProjects" :disabled="!currentProjectId">
+                <span class="iconify" data-icon="solar:diskette-bold"></span>
+                保存到项目列表
+              </button>
+              <button class="delete-btn" @click="deleteProject" :disabled="!currentProjectId">
+                <span class="iconify" data-icon="solar:trash-bin-trash-linear"></span>
+                删除
+              </button>
+            </div>
+            
             <!-- 数据集转换提示 -->
             <div v-if="needsConversion" class="conversion-alert">
               <div class="alert-icon">
@@ -178,7 +202,7 @@
             <div class="preview-container">
               <img v-if="previewImage" class="preview-image" :src="previewImage" alt="Training Preview">
               <div v-else class="preview-placeholder">等待训练数据...</div>
-              <div class="iteration-overlay">Iter: {{ currentIteration }} / {{ iterations }}</div>
+              <div class="iteration-overlay">Iter: {{ currentIteration }} / 40000</div>
             </div>
           </div>
           
@@ -348,7 +372,16 @@ export default {
       saveDebounceTimer: null,
       
       // 新增：加载项目标记，防止加载时触发自动保存
-      isLoadingProject: false
+      isLoadingProject: false,
+      
+      // 新增：显示重试/删除按钮
+      showRetryDeleteButtons: false,
+      
+      // 新增：训练完成后显示保存/删除按钮
+      showCompleteButtons: false,
+      
+      // 新增：标记用户是否主动终止了训练
+      userCancelled: false
     }
   },
   computed: {
@@ -392,6 +425,24 @@ export default {
     // 检查是否有 resumeProjectId 参数，有则加载项目配置
     if (this.$route.query.resumeProjectId) {
       await this.loadProjectFromRoute();
+    } else {
+      // ========== 重要：如果是新建训练（无 projectId），清空所有动态数据 ==========
+      console.log('[新建训练] 未检测到 resumeProjectId，判定为新建训练');
+      console.log('[新建训练] 清空之前的动态数据...');
+      
+      this.lossData = [];
+      this.psnrData = [];
+      this.ssimData = [];
+      this.evalL1Data = [];
+      this.logs = [];
+      this.bakingLogs = [];
+      this.currentIteration = 0;
+      this.previewImage = null;
+      this.isTraining = false;
+      this.isBaking = false;
+      this.currentProjectId = null;  // 重置为 null，等待创建新项目
+      
+      console.log('[新建训练] ✓ 动态数据已清空，可以开始新的训练');
     }
     
     // 检查是否有初始预览图（从 ProgressPage 传递过来）
@@ -546,6 +597,9 @@ export default {
       this.isLoadingProject = true;
       console.log('[加载项目] 设置加载中标记，暂停自动保存');
       
+      // 清除用户取消标记（恢复项目时）
+      this.userCancelled = false;
+      
       // 设置当前项目 ID（用于后续自动保存）
       this.currentProjectId = projectId;
       console.log('[加载项目] 设置 currentProjectId:', projectId);
@@ -563,7 +617,19 @@ export default {
         const project = result.data;
         console.log('[加载项目] 成功获取项目配置:', project);
         
-        // 填充表单字段
+        // ========== 关键：先清空之前的动态数据（避免跨项目污染）==========
+        console.log('[加载项目] 清空之前的动态数据...');
+        this.lossData = [];
+        this.psnrData = [];
+        this.ssimData = [];
+        this.evalL1Data = [];
+        this.logs = [];
+        this.bakingLogs = [];
+        this.currentIteration = 0;
+        this.previewImage = null;
+        console.log('[加载项目] ✓ 动态数据已清空');
+        
+        // 填充表单字段（静态配置）
         this.projectName = project.name || '';
         this.modelPath = project.outputPath || '';
         this.sourcePath = project.sourcePath || '';
@@ -577,17 +643,25 @@ export default {
         this.occlusion = project.config?.occlusion ?? 0.8;
         
         // 恢复检查点路径（如果有）
-        if (project.checkpoint) {
+        if (project.checkpoint && project.checkpoint.trim()) {
           // 优先使用保存的 checkpoint 路径
           this.checkpoint = project.checkpoint;
           console.log('[加载项目] 恢复 checkpoint 路径:', this.checkpoint);
         } else if (project.stage === 'stage2' || project.stage === 'baking') {
           // 如果没有保存 checkpoint，则从 outputPath 推导
           const lastSlashIndex = project.outputPath.lastIndexOf('/');
-          if (lastSlashIndex !== -1) {
-            const baseDir = project.outputPath.substring(0, lastSlashIndex);
+          const lastBackslashIndex = project.outputPath.lastIndexOf('\\');
+          // 取两种路径分隔符中最大的索引
+          const lastIndex = Math.max(lastSlashIndex, lastBackslashIndex);
+          
+          if (lastIndex !== -1) {
+            const baseDir = project.outputPath.substring(0, lastIndex);
             this.checkpoint = `${baseDir}/chkpnt${project.currentIteration || 30000}.pth`;
             console.log('[加载项目] 从 outputPath 推导 checkpoint 路径:', this.checkpoint);
+          } else {
+            // 如果路径中没有分隔符，直接使用 outputPath 作为目录
+            this.checkpoint = `${project.outputPath}/chkpnt${project.currentIteration || 30000}.pth`;
+            console.log('[加载项目] outputPath 无分隔符，直接使用:', this.checkpoint);
           }
         }
         
@@ -656,8 +730,12 @@ export default {
           this.addLog(`项目已在队列中等待：${project.name}`, 'info');
         } else if (project.status === 'completed') {
           this.addLog(`项目已完成：${project.name}`, 'success');
+          this.showCompleteButtons = true;
         } else if (project.status === 'error') {
           this.addLog(`项目发生错误：${project.name}`, 'error');
+          this.trainingStatus = 'error';
+          this.showRetryDeleteButtons = true;
+          this.addLog('可以选择重试或删除项目', 'warning');
         }
         
         // 刷新分辨率选择
@@ -1225,12 +1303,25 @@ export default {
     setupIPCListeners() {
       // 监听训练输出
       window.electronAPI?.onTrainingOutput((data) => {
-        this.handleTrainingOutput(data);
+        // ✅ 重要：只处理当前项目的输出
+        // ⚠️ 如果后台有其他项目在运行，不应将数据显示在当前页面
+        if (this.currentProjectId) {
+          console.log('[训练输出] 收到输出，当前 projectId:', this.currentProjectId);
+          this.handleTrainingOutput(data);
+        } else {
+          console.log('[训练输出] 无 currentProjectId，忽略输出');
+        }
       });
       
       // 监听烘焙输出
       window.electronAPI?.onBakingOutput((data) => {
-        this.handleBakingOutput(data);
+        // ✅ 同样需要检查项目 ID
+        if (this.currentProjectId) {
+          console.log('[烘焙输出] 收到输出，当前 projectId:', this.currentProjectId);
+          this.handleBakingOutput(data);
+        } else {
+          console.log('[烘焙输出] 无 currentProjectId，忽略输出');
+        }
       });
       
       // 监听转换输出
@@ -1263,57 +1354,25 @@ export default {
     
     // 保存项目配置
     async saveProjectConfig() {
+      // ⚠️ 重要：仅在用户点击"开始训练"按钮时调用一次
+      // 训练过程中的动态数据（loss、psnr、ssim、preview 等）由后端通过解析 train.py 输出自动更新
+      // 前端不得在训练过程中调用此方法保存运行时数据
+      
       if (!this.currentProjectId) {
         console.log('[保存项目] 无 projectId，跳过保存');
         return;
       }
       
+      // ✅ 检查：如果正在训练中，禁止保存（避免误调用）
+      if (this.isTraining || this.isBaking) {
+        console.warn('[保存项目] ⚠️ 训练进行中，禁止调用 saveProjectConfig');
+        console.warn('[保存项目] 动态数据应由后端通过 TRAINING_STATE_UPDATE 自动更新');
+        return;
+      }
+      
       try {
-        // 创建纯 JSON 对象，避免 Vue 响应式代理和 ECharts 特殊对象
-        const safeClone = (obj) => {
-          if (obj === null || typeof obj !== 'object') {
-            return obj;
-          }
-          if (Array.isArray(obj)) {
-            return obj.map(item => safeClone(item));
-          }
-          const cloned = {};
-          for (const key in obj) {
-            if (obj.hasOwnProperty(key)) {
-              const value = obj[key];
-              // 跳过函数、undefined 和特殊对象
-              if (typeof value === 'function' || typeof value === 'undefined') {
-                continue;
-              }
-              // 只保留可序列化的类型
-              if (typeof value === 'string' || 
-                  typeof value === 'number' || 
-                  typeof value === 'boolean' || 
-                  value === null || 
-                  Array.isArray(value) || 
-                  (typeof value === 'object' && value.constructor === Object)) {
-                cloned[key] = safeClone(value);
-              }
-            }
-          }
-          return cloned;
-        };
-        
-        // 提取并清理图表数据 (只保留基本类型)
-        const cleanChartData = (data) => {
-          return data.map(item => {
-            if (typeof item === 'object' && item !== null) {
-              // 如果是对象，只保留 iteration 和 value 字段
-              return {
-                iteration: Number(item.iteration || item.iter || 0),
-                value: Number(item.value || item.loss || item.psnr || item.ssim || item.evalL1 || 0)
-              };
-            }
-            return item;
-          });
-        };
-        
         const config = {
+          // ========== 静态用户配置（仅在点击"开始训练"时保存一次）==========
           projectName: String(this.projectName || ''),
           outputPath: String(this.modelPath || ''),
           sourcePath: String(this.sourcePath || ''),
@@ -1326,33 +1385,13 @@ export default {
           occluRes: Number(this.occluRes || 128),
           occlusion: Number(this.occlusion || 0.8),
           checkpoint: this.checkpoint ? String(this.checkpoint) : null,
-          // 训练状态信息
-          isTraining: Boolean(this.isTraining),
-          isBaking: Boolean(this.isBaking),
-          currentIteration: Number(this.currentIteration || 0),
-          logs: this.logs.slice(-200).map(log => ({
-            time: String(log.time || ''),
-            message: String(log.message || ''),
-            type: String(log.type || 'info')
-          })),
-          // 图表数据 - 确保是纯数组
-          metrics: safeClone({
-            lossHistory: cleanChartData(this.lossData),
-            psnrHistory: cleanChartData(this.psnrData),
-            ssimHistory: cleanChartData(this.ssimData),
-            evalL1History: cleanChartData(this.evalL1Data)
-          }),
-          // Baking 状态信息
-          bakingStatus: String(this.bakingStatus || 'idle'),
-          bakingProgress: Number(this.bakingProgress || 0),
-          bakingLogs: this.bakingLogs.slice(-200).map(log => ({
-            time: String(log.time || ''),
-            message: String(log.message || ''),
-            type: String(log.type || 'info')
-          }))
+          
+          // ========== 注意：以下动态字段不应在此保存 ==========
+          // ❌ 不保存：currentIteration, loss, psnr, ssim, preview, logs, metrics
+          // ✅ 这些字段由后端通过解析 train.py 的 stdout 自动更新到 projects.json
         };
         
-        console.log('[保存项目] ✓ 准备保存配置:', {
+        console.log('[保存项目] ✓ 准备保存用户配置（静态参数）:', {
           checkpoint: config.checkpoint,
           gamma: config.gamma,
           indirect: config.indirect,
@@ -1362,6 +1401,7 @@ export default {
           occluRes: config.occluRes,
           occlusion: config.occlusion
         });
+        console.log('[保存项目] ⚠️ 注意：动态数据（loss、psnr、ssim、iteration 等）将由后端自动更新');
         
         // 详细日志：对比当前 UI 值和要保存的值
         console.log('[保存项目] UI 当前值:', {
@@ -1401,6 +1441,31 @@ export default {
       } catch (error) {
         console.error('[保存项目] 异常:', error);
         alert('项目配置保存失败：' + error.message);
+      }
+    },
+    
+    // 更新项目状态
+    async updateProjectStatus(newStatus) {
+      if (!this.currentProjectId) {
+        console.log('[更新项目状态] 无 projectId，跳过更新');
+        return;
+      }
+      
+      try {
+        console.log(`[更新项目状态] 将 ${this.currentProjectId} 的状态更新为：${newStatus}`);
+        
+        const result = await window.electronAPI?.updateProjectConfig(
+          this.currentProjectId,
+          { status: newStatus }
+        );
+        
+        if (result?.success) {
+          console.log(`[更新项目状态] ✓ 状态已更新为：${newStatus}`);
+        } else {
+          console.error('[更新项目状态] ✗ 更新失败:', result?.error);
+        }
+      } catch (error) {
+        console.error('[更新项目状态] 异常:', error);
       }
     },
     
@@ -1474,6 +1539,12 @@ export default {
     },
     
     handleTrainingOutput(data) {
+      // ✅ 重要：只处理当前项目的输出
+      if (!this.currentProjectId) {
+        console.log('[训练输出] 无 currentProjectId，忽略输出');
+        return;
+      }
+      
       const timestamp = new Date().toLocaleTimeString();
       
       if (data.type === 'stdout' || data.type === 'stderr') {
@@ -1641,18 +1712,48 @@ export default {
         }
       } else if (data.type === 'close') {
         this.isTraining = false;
-        // 根据退出代码判断是正常完成还是错误
-        if (data.code === 0) {
+        
+        // 判断是用户主动终止还是正常完成
+        if (this.userCancelled) {
+          // 用户主动终止：状态设为 error，显示重试/删除按钮
+          this.trainingStatus = 'error';
+          this.showRetryDeleteButtons = true;
+          this.addLog(`训练已被用户终止，退出代码：${data.code}`, 'warning');
+          this.addLog('训练已停止，可以选择重试或删除项目', 'warning');
+          // 清除取消标记
+          this.userCancelled = false;
+          // 更新项目状态为 error
+          this.updateProjectStatus('error');
+        } else if (data.code === 0) {
+          // 训练正常完成
           this.trainingStatus = 'completed';
           this.addLog(`训练进程正常结束，退出代码：${data.code}`, 'success');
+          
+          // 检查是否是 Stage2 完成（三个阶段全部完成）
+          if (this.stage === 'stage2' || (this.checkpoint && this.checkpoint.endsWith('.pth'))) {
+            console.log('[训练完成] 检测到 Stage2 完成，三个阶段全部完成');
+            this.showCompleteButtons = true;
+            this.addLog('✓ 训练已全部完成，可以选择保存到项目列表或删除', 'success');
+          }
         } else {
+          // 训练异常退出：状态设为 error，显示重试/删除按钮
           this.trainingStatus = 'error';
+          this.showRetryDeleteButtons = true;
           this.addLog(`训练进程异常结束，退出代码：${data.code}`, 'error');
+          this.addLog('训练遇到错误已停止，可以选择重试或删除项目', 'warning');
+          // 更新项目状态为 error
+          this.updateProjectStatus('error');
         }
       }
     },
     
     handleBakingOutput(data) {
+      // ✅ 重要：只处理当前项目的输出
+      if (!this.currentProjectId) {
+        console.log('[烘焙输出] 无 currentProjectId，忽略输出');
+        return;
+      }
+      
       const timestamp = new Date().toLocaleTimeString();
           
       if (data.type === 'stdout' || data.type === 'stderr') {
@@ -1690,6 +1791,15 @@ export default {
         this.isBaking = false;
         this.bakingStatus = data.code === 0 ? 'completed' : 'error';
         this.addBakingLog(`烘焙进程结束，退出代码：${data.code}`, 'warning');
+        
+        // 如果是错误，显示重试/删除按钮
+        if (data.code !== 0) {
+          this.showRetryDeleteButtons = true;
+          this.addLog('烘焙遇到错误已停止，可以选择重试或删除项目', 'warning');
+          // 更新项目状态为 error
+          this.updateProjectStatus('error');
+        }
+        
         // 状态变化时立即保存
         this.saveProjectConfig();
       }
@@ -2066,6 +2176,9 @@ export default {
       }
       
       try {
+        // 清除用户取消标记（新训练开始）
+        this.userCancelled = false;
+        
         this.addLog('========================================', 'info');
         this.addLog('开始完整训练流程 (Stage1 → Baking → Stage2)', 'success');
         this.addLog('========================================', 'info');
@@ -2087,55 +2200,38 @@ export default {
           console.log('[完整流程] ✓ 初始状态已保存，gamma:', this.gamma, ', indirect:', this.indirect, ', checkpoint:', this.checkpoint);
         }
         
-        // ========== Stage 1: 初始训练 ==========
-        this.addLog('【阶段 1/3】开始 Stage1 初始训练...', 'info');
-        await this.executeStage1();
+        // ========== 智能判断：根据输出目录中的文件决定从哪个阶段开始 ==========
+        const stageInfo = await this.detectTrainingStage();
         
-        // 等待 Stage1 完成（通过轮询检查）
-        await this.waitForStageCompletion('training');
+        console.log('[智能判断] 检测结果:', stageInfo);
         
-        // 检查 Stage1 是否成功完成
-        if (this.trainingStatus === 'error') {
-          throw new Error('Stage1 训练失败');
+        if (stageInfo.shouldStartStage2Directly) {
+          // 直接开始 Stage2
+          this.addLog('检测到 chkpnt30000.pth 和 occlusion_volumes.pth 文件，跳过 Stage1 和 Baking', 'success');
+          this.addLog('【阶段 3/3】开始 Stage2 优化训练...', 'info');
+          await this.executeStage2();
+          await this.waitForStageCompletion('training');
+        } else if (stageInfo.shouldStartBakingDirectly) {
+          // 直接开始 Baking
+          this.addLog('检测到 chkpnt30000.pth 文件，跳过 Stage1', 'success');
+          this.addLog('【阶段 2/3】开始 Baking 烘焙...', 'info');
+          await this.executeBaking();
+          await this.waitForStageCompletion('baking');
+          this.addLog('【阶段 2/3】✓ Baking 完成', 'success');
+          
+          // 继续执行 Stage2
+          this.addLog('【阶段 3/3】开始 Stage2 优化训练...', 'info');
+          await this.executeStage2();
+          await this.waitForStageCompletion('training');
+        } else if (this.bakingStatus === 'error' || this.trainingStatus === 'error') {
+          // 之前出错了，询问用户如何处理
+          this.addLog('检测到之前的训练发生错误', 'warning');
+          this.showRetryDeleteButtons = true;
+          return;  // 不自动继续，让用户手动选择
+        } else {
+          // 从头开始完整流程
+          await this.startFullTrainingFromBegin();
         }
-        
-        // 更新检查点路径
-        const lastSlashIndex = this.modelPath.lastIndexOf('/');
-        const baseDir = this.modelPath.substring(0, lastSlashIndex);
-        this.checkpoint = `${baseDir}/chkpnt30000.pth`;
-        this.addLog(`【阶段 1/3】✓ Stage1 完成，检查点：${this.checkpoint}`, 'success');
-        
-        // checkpoint 变动后立即保存
-        if (this.currentProjectId) {
-          await this.saveProjectConfig();
-          console.log('[完整流程] ✓ checkpoint 已保存:', this.checkpoint);
-        }
-        
-        // ========== Baking: 烘焙 ==========
-        this.addLog('【阶段 2/3】开始 Baking 烘焙...', 'info');
-        await this.executeBaking();
-        
-        // 等待 Baking 完成
-        await this.waitForStageCompletion('baking');
-        this.addLog('【阶段 2/3】✓ Baking 完成', 'success');
-        
-        // ========== Stage 2: 优化训练 ==========
-        this.addLog('【阶段 3/3】开始 Stage2 优化训练...', 'info');
-        await this.executeStage2();
-        
-        // 等待 Stage2 完成
-        await this.waitForStageCompletion('training');
-        
-        // 检查 Stage2 是否成功完成
-        if (this.trainingStatus === 'error') {
-          throw new Error('Stage2 训练失败');
-        }
-        
-        this.addLog('【阶段 3/3】✓ Stage2 完成', 'success');
-        
-        this.addLog('========================================', 'success');
-        this.addLog('🎉 完整训练流程全部完成!', 'success');
-        this.addLog('========================================', 'success');
         
       } catch (error) {
         console.error('完整训练流程失败:', error);
@@ -2145,6 +2241,110 @@ export default {
         this.isBaking = false;
         // 不自动重置 status，让用户查看错误信息
       }
+    },
+    
+    // 检测输出目录中的文件，决定从哪个阶段开始训练
+    async detectTrainingStage() {
+      try {
+        const checkpointPath = `${this.modelPath}/chkpnt30000.pth`;
+        const occlusionPath = `${this.modelPath}/occlusion_volumes.pth`;
+        
+        // 检查文件是否存在
+        const checkpointResult = await window.electronAPI?.checkFileExists(checkpointPath);
+        const occlusionResult = await window.electronAPI?.checkFileExists(occlusionPath);
+        
+        const hasCheckpoint = checkpointResult?.exists === true;
+        const hasOcclusion = occlusionResult?.exists === true;
+        
+        console.log('[文件检测]', {
+          checkpoint: checkpointPath,
+          hasCheckpoint,
+          occlusion: occlusionPath,
+          hasOcclusion
+        });
+        
+        // 判断逻辑
+        if (hasOcclusion) {
+          // 有 occlusion_volumes.pth，说明 Baking 已完成，直接进 Stage2
+          return {
+            shouldStartStage2Directly: true,
+            shouldStartBakingDirectly: false,
+            stage: 'stage2'
+          };
+        } else if (hasCheckpoint) {
+          // 只有 chkpnt30000.pth，需要执行 Baking
+          return {
+            shouldStartStage2Directly: false,
+            shouldStartBakingDirectly: true,
+            stage: 'baking'
+          };
+        } else {
+          // 两个文件都没有，从头开始
+          return {
+            shouldStartStage2Directly: false,
+            shouldStartBakingDirectly: false,
+            stage: 'stage1'
+          };
+        }
+      } catch (error) {
+        console.error('[文件检测] 失败:', error);
+        // 出错时默认从头开始
+        return {
+          shouldStartStage2Directly: false,
+          shouldStartBakingDirectly: false,
+          stage: 'stage1'
+        };
+      }
+    },
+    
+    // 从头开始完整训练流程（用于智能判断后）
+    async startFullTrainingFromBegin() {
+      this.addLog('【阶段 1/3】开始 Stage1 初始训练...', 'info');
+      await this.executeStage1();
+      
+      // 等待 Stage1 完成
+      await this.waitForStageCompletion('training');
+      
+      if (this.trainingStatus === 'error') {
+        throw new Error('Stage1 训练失败');
+      }
+      
+      // 更新检查点路径
+      const lastSlashIndex = this.modelPath.lastIndexOf('/');
+      const baseDir = this.modelPath.substring(0, lastSlashIndex);
+      this.checkpoint = `${baseDir}/chkpnt30000.pth`;
+      this.addLog(`【阶段 1/3】✓ Stage1 完成，检查点：${this.checkpoint}`, 'success');
+      
+      // checkpoint 变动后立即保存
+      if (this.currentProjectId) {
+        await this.saveProjectConfig();
+        console.log('[完整流程] ✓ checkpoint 已保存:', this.checkpoint);
+      }
+      
+      // ========== Baking: 烘焙 ==========
+      this.addLog('【阶段 2/3】开始 Baking 烘焙...', 'info');
+      await this.executeBaking();
+      
+      // 等待 Baking 完成
+      await this.waitForStageCompletion('baking');
+      this.addLog('【阶段 2/3】✓ Baking 完成', 'success');
+      
+      // ========== Stage 2: 优化训练 ==========
+      this.addLog('【阶段 3/3】开始 Stage2 优化训练...', 'info');
+      await this.executeStage2();
+      
+      // 等待 Stage2 完成
+      await this.waitForStageCompletion('training');
+      
+      if (this.trainingStatus === 'error') {
+        throw new Error('Stage2 训练失败');
+      }
+      
+      this.addLog('【阶段 3/3】✓ Stage2 完成', 'success');
+      
+      this.addLog('========================================', 'success');
+      this.addLog('🎉 完整训练流程全部完成!', 'success');
+      this.addLog('========================================', 'success');
     },
     
     async executeStage1() {
@@ -2185,6 +2385,22 @@ export default {
       this.psnrData = [];
       this.logs = [];
       this.bakingStatus = 'idle';
+      
+      // ✅ 重要：如果是新建训练（之前没有 projectId），现在有了，需要重新加载页面以显示监控界面
+      if (!this.$route.query.resumeProjectId && this.currentProjectId) {
+        console.log('[executeStage1] 检测到是新项目，准备刷新页面以显示监控界面...');
+        console.log('[executeStage1] 当前 projectId:', this.currentProjectId);
+        
+        // 使用 replace 而不是 push，避免产生历史记录
+        await this.$router.replace({
+          path: '/train',
+          query: {
+            resumeProjectId: this.currentProjectId
+          }
+        });
+        
+        console.log('[executeStage1] ✓ 页面已刷新，现在将显示实时监控数据');
+      }
       
       // 仅更新项目阶段，不保存配置（避免覆盖用户的原始参数设置）
       if (this.currentProjectId) {
@@ -2238,7 +2454,7 @@ export default {
       const config = {
         modelPath: this.modelPath,
         sourcePath: this.sourcePath,
-        iterations: 35000,
+        iterations: 40000,
         eval: this.evalMode,
         resolution: this.resolution,
         imageSubdir: this.imageSubdir,
@@ -2327,7 +2543,7 @@ export default {
         const config = {
           modelPath: this.modelPath,
           sourcePath: this.sourcePath,
-          iterations: 35000,
+          iterations: 40000,
           eval: this.evalMode,
           resolution: this.resolution,
           imageSubdir: this.imageSubdir,
@@ -2456,6 +2672,9 @@ export default {
     async stopTraining() {
       console.log('[停止操作] 开始执行停止流程');
       
+      // 设置用户主动终止标记
+      this.userCancelled = true;
+      
       try {
         // 停止训练进程
         if (this.isTraining) {
@@ -2508,11 +2727,19 @@ export default {
         this.$forceUpdate();
         console.log('[停止操作] 停止流程完成');
         
+        // 显示重试/删除按钮
+        this.showRetryDeleteButtons = true;
+        this.addLog('训练已停止，可以选择重试或删除项目', 'warning');
+        
       } catch (error) {
         console.error('[停止操作] 发生异常:', error);
         // 即使出错也强制更新状态
         this.isTraining = false;
         this.isBaking = false;
+        
+        // 显示错误信息并显示按钮
+        this.addLog(`停止过程出错：${error.message}`, 'error');
+        this.showRetryDeleteButtons = true;
         this.bakingStatus = 'error';
         this.addLog(`停止操作完成（可能未完全停止）`, 'warning');
         this.$forceUpdate();
@@ -2621,6 +2848,185 @@ export default {
       } catch (error) {
         console.error('选择文件异常:', error);
         alert(`无法打开文件选择对话框：${error.message}`);
+      }
+    },
+    
+    // 重试训练：删除输出目录和 projects.json 中的项目记录，以新项目方式重新训练
+    async retryTraining() {
+      console.log('[重试] 开始执行重试流程');
+      
+      if (!this.currentProjectId || !this.modelPath) {
+        this.addLog('错误：缺少项目 ID 或模型路径', 'error');
+        return;
+      }
+      
+      try {
+        // 1. 删除 projects.json 中的项目记录
+        this.addLog(`正在删除项目记录：${this.currentProjectId}`, 'warning');
+        const deleteProjectResult = await window.electronAPI?.deleteProjectAndOutput(
+          this.currentProjectId, 
+          null  // 不删除输出目录，稍后会整个清空
+        );
+        
+        if (deleteProjectResult?.success) {
+          this.addLog('✓ 项目记录已删除', 'success');
+        } else {
+          this.addLog(`删除项目记录失败：${deleteProjectResult?.error || '未知错误'}`, 'error');
+        }
+        
+        // 2. 删除输出目录（整个清空）
+        if (this.modelPath) {
+          this.addLog(`正在清空输出目录：${this.modelPath}`, 'warning');
+          const deleteDirResult = await window.electronAPI?.deleteOutputDirectory(this.modelPath);
+          
+          if (deleteDirResult?.success) {
+            this.addLog('✓ 输出目录已清空', 'success');
+          } else {
+            this.addLog(`删除输出目录失败：${deleteDirResult?.error || '未知错误'}`, 'error');
+          }
+        }
+        
+        // 3. 重置状态（不清空表单字段，以便重新训练）
+        this.showRetryDeleteButtons = false;
+        this.trainingStatus = 'idle';
+        this.bakingStatus = 'idle';
+        this.currentIteration = 0;
+        this.logs = [];
+        this.bakingLogs = [];
+        this.lossData = [];
+        this.psnrData = [];
+        this.ssimData = [];
+        this.evalL1Data = [];
+        this.previewImage = null;
+        this.currentProjectId = null;  // 清除项目 ID，作为新项目处理
+        
+        // 清空 ECharts 图表显示
+        this.$nextTick(() => {
+          this.updateLossChart();
+          this.updatePsnrChart();
+          this.updateSsimChart();
+          this.updateEvalL1Chart();
+        });
+        
+        this.addLog('状态已重置，将以新项目方式重新开始训练', 'info');
+        
+        // 4. 再次执行开始训练（作为新项目）
+        await this.startFullTraining();
+        
+      } catch (error) {
+        console.error('[重试] 发生异常:', error);
+        this.addLog(`重试失败：${error.message}`, 'error');
+      }
+    },
+    
+    // 保存训练完成的项目到项目列表
+    async saveToProjects() {
+      console.log('[保存] 开始执行保存流程');
+      
+      if (!this.currentProjectId) {
+        this.addLog('错误：项目 ID 不存在', 'error');
+        return;
+      }
+      
+      try {
+        // 1. 获取最后渲染的图像作为缩略图
+        this.addLog('正在获取最新渲染图像...', 'info');
+        const imageResult = await window.electronAPI?.getLatestRenderedImage(this.modelPath);
+        
+        let thumbnailBase64 = null;
+        if (imageResult?.success && imageResult.imageBase64) {
+          thumbnailBase64 = imageResult.imageBase64;
+          console.log('[保存] ✓ 已获取最新渲染图像');
+        } else {
+          console.warn('[保存] ⚠ 未找到渲染图像，继续保存但不包含缩略图');
+        }
+        
+        // 2. 调用后端 API 保存到项目列表
+        this.addLog('正在保存到项目列表...', 'info');
+        const saveResult = await window.electronAPI?.saveToProjectsList({
+          projectId: this.currentProjectId,
+          thumbnailBase64
+        });
+        
+        if (saveResult?.success) {
+          this.addLog('✓ 项目已成功保存到项目列表！', 'success');
+          
+          // 3. 隐藏按钮
+          this.showCompleteButtons = false;
+          
+          // 4. 可选：跳转到 ProjectsPage
+          const goToProjects = confirm('项目已保存成功！是否立即跳转到项目列表查看？');
+          if (goToProjects) {
+            this.$router.push({ name: 'projects' });
+          }
+        } else {
+          this.addLog(`保存失败：${saveResult?.error || '未知错误'}`, 'error');
+        }
+        
+      } catch (error) {
+        console.error('[保存] 发生异常:', error);
+        this.addLog(`保存失败：${error.message}`, 'error');
+      }
+    },
+    
+    // 删除项目：仅删除输出目录和渲染列表信息
+    async deleteProject() {
+      console.log('[删除] 开始执行删除流程');
+      
+      if (!this.currentProjectId) {
+        this.addLog('错误：项目 ID 不存在', 'error');
+        return;
+      }
+      
+      // 确认删除
+      const confirmed = confirm(`确定要删除项目 "${this.projectName}" 及其所有输出文件吗？\n\n此操作不可恢复！`);
+      
+      if (!confirmed) {
+        this.addLog('用户取消了删除操作', 'warning');
+        return;
+      }
+      
+      try {
+        // 1. 删除项目及其输出
+        const deleteResult = await window.electronAPI?.deleteProjectAndOutput(
+          this.currentProjectId, 
+          this.modelPath
+        );
+        
+        if (deleteResult?.success) {
+          this.addLog('✓ 项目及其输出已成功删除', 'success');
+          
+          // 2. 重置表单和状态
+          this.projectName = '';
+          this.modelPath = '';
+          this.sourcePath = '';
+          this.checkpoint = '';
+          this.currentProjectId = null;
+          this.showRetryDeleteButtons = false;
+          this.trainingStatus = 'idle';
+          this.bakingStatus = 'idle';
+          this.currentIteration = 0;
+          this.logs = [];
+          this.bakingLogs = [];
+          this.lossData = [];
+          this.psnrData = [];
+          this.ssimData = [];
+          this.evalL1Data = [];
+          this.previewImage = null;
+          
+          this.addLog('表单已清空，可以创建新项目', 'info');
+          
+          // 3. 通知 ProgressPage 更新队列（如果有这个 API）
+          if (window.electronAPI?.onTrainingQueueUpdate) {
+            console.log('[删除] 触发队列更新');
+          }
+        } else {
+          this.addLog(`删除失败：${deleteResult?.error || '未知错误'}`, 'error');
+        }
+        
+      } catch (error) {
+        console.error('[删除] 发生异常:', error);
+        this.addLog(`删除失败：${error.message}`, 'error');
       }
     },
     
@@ -2923,6 +3329,102 @@ export default {
 
 .stop-btn:hover:not(:disabled) {
   background-color: #fecaca;
+}
+
+/* 重试/删除按钮样式 */
+.retry-delete-buttons {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid #e2e8f0;
+}
+
+.retry-btn {
+  flex: 1;
+  padding: 0.625rem 1rem;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s;
+  background-color: #dbeafe;
+  color: #1e40af;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+}
+
+.retry-btn:hover:not(:disabled) {
+  background-color: #bfdbfe;
+}
+
+.retry-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.delete-btn {
+  flex: 1;
+  padding: 0.625rem 1rem;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s;
+  background-color: #fee2e2;
+  color: #991b1b;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+}
+
+.delete-btn:hover:not(:disabled) {
+  background-color: #fecaca;
+}
+
+.delete-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 训练完成后的按钮样式 */
+.complete-buttons {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid #e2e8f0;
+}
+
+.save-btn {
+  flex: 1;
+  padding: 0.625rem 1rem;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s;
+  background-color: #dcfce7;
+  color: #166534;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+}
+
+.save-btn:hover:not(:disabled) {
+  background-color: #bbf7d0;
+}
+
+.save-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .monitoring-panel {

@@ -176,6 +176,27 @@ ipcMain.handle('check-folder-empty', async (event, folderPath) => {
   }
 });
 
+// 检查文件是否存在
+ipcMain.handle('check-file-exists', async (event, filePath) => {
+  try {
+    if (!filePath) {
+      return { success: false, error: '文件路径为空' };
+    }
+    
+    try {
+      await fs.access(filePath);
+      console.log(`[FileCheck] 文件存在：${filePath}`);
+      return { success: true, exists: true };
+    } catch (err) {
+      console.log(`[FileCheck] 文件不存在：${filePath}`);
+      return { success: true, exists: false };
+    }
+  } catch (error) {
+    console.error('[FileCheck] 检查失败:', error);
+    return { success: false, error: error.message };
+  }
+});
+
 ipcMain.handle('select-file', async (event, options = {}) => {
   try {
     if (!mainWindow) {
@@ -1130,6 +1151,186 @@ ipcMain.handle('update-project-stage', async (event, data) => {
   console.error('[IPC] 更新项目阶段失败:', error);
   return { success: false, error: error.message };
  }
+});
+
+// 删除输出目录内容（保留目录本身）
+ipcMain.handle('delete-output-directory', async (event, outputPath) => {
+  try {
+    const fs = require('fs').promises;
+    const path = require('path');
+    
+    console.log(`[删除输出] 准备清空目录内容：${outputPath}`);
+    
+    if (!outputPath) {
+      return { success: false, error: '输出路径为空' };
+    }
+    
+    // 检查目录是否存在
+    try {
+      await fs.access(outputPath);
+    } catch (err) {
+      console.log(`[删除输出] 目录不存在：${outputPath}`);
+      return { success: true, message: '目录不存在，无需删除' };
+    }
+    
+    // 读取目录内容
+    console.log(`[删除输出] 开始读取目录内容：${outputPath}`);
+    const entries = await fs.readdir(outputPath, { withFileTypes: true });
+    
+    // 删除所有文件和子目录
+    for (const entry of entries) {
+      const fullPath = path.join(outputPath, entry.name);
+      console.log(`[删除输出] 删除项：${fullPath}`);
+      
+      if (entry.isDirectory()) {
+        // 递归删除子目录
+        await fs.rm(fullPath, { recursive: true, force: true });
+      } else {
+        // 删除文件
+        await fs.unlink(fullPath);
+      }
+    }
+    
+    console.log(`[删除输出] ✓ 成功清空目录内容：${outputPath}（保留目录本身）`);
+    
+    return { success: true, message: '目录内容已清空' };
+  } catch (error) {
+    console.error('[删除输出] 删除失败:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// 删除项目及其输出（仅清空目录内容，保留目录本身）
+ipcMain.handle('delete-project-and-output', async (event, data) => {
+  try {
+    const { projectId, outputPath } = data;
+    
+    console.log(`[删除项目] 准备删除项目：${projectId}, 输出目录：${outputPath}`);
+    
+    if (!projectId) {
+      return { success: false, error: '缺少 projectId' };
+    }
+    
+    // 1. 先清空输出目录内容（保留目录本身）
+    if (outputPath) {
+      try {
+        const fs = require('fs').promises;
+        const path = require('path');
+        
+        // 检查目录是否存在
+        try {
+          await fs.access(outputPath);
+          
+          // 读取并删除目录内容
+          const entries = await fs.readdir(outputPath, { withFileTypes: true });
+          for (const entry of entries) {
+            const fullPath = path.join(outputPath, entry.name);
+            if (entry.isDirectory()) {
+              await fs.rm(fullPath, { recursive: true, force: true });
+            } else {
+              await fs.unlink(fullPath);
+            }
+          }
+          console.log(`[删除项目] ✓ 输出目录内容已清空：${outputPath}（保留目录本身）`);
+        } catch (err) {
+          if (err.code !== 'ENOENT') {
+            console.warn(`[删除项目] 清空输出目录失败：${err.message}`);
+          } else {
+            console.log(`[删除项目] 输出目录不存在，跳过：${outputPath}`);
+          }
+        }
+      } catch (err) {
+        console.warn(`[删除项目] 处理输出目录异常：${err.message}`);
+      }
+    }
+    
+    // 2. 删除项目配置
+    if (projectId) {
+      const result = await projectManager.deleteProject(projectId);
+      if (result.success) {
+        console.log(`[删除项目] ✓ 项目配置已删除：${projectId}`);
+      } else {
+        console.warn(`[删除项目] 删除项目配置失败：${result.error}`);
+      }
+    }
+    
+    return { success: true, message: '项目及其输出已删除' };
+  } catch (error) {
+    console.error('[删除项目] 删除失败:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// 保存训练完成的项目到项目列表
+ipcMain.handle('save-to-projects-list', async (event, data) => {
+  try {
+    const { projectId, thumbnailBase64 } = data;
+    
+    console.log(`[保存项目] 准备保存项目到列表：${projectId}`);
+    
+    if (!projectId) {
+      return { success: false, error: '缺少 projectId' };
+    }
+    
+    // 1. 加载项目配置
+    const projectResult = await projectManager.loadProject(projectId);
+    if (!projectResult.success) {
+      return { success: false, error: projectResult.error };
+    }
+    
+    const projectConfig = projectResult.data;
+    console.log(`[保存项目] 项目配置：`, projectConfig);
+    
+    // 2. 保存缩略图（如果有）
+    let thumbnailPath = null;
+    if (thumbnailBase64) {
+      try {
+        const fs = require('fs');
+        const path = require('path');
+        
+        // 在项目输出目录的 .luminags 中保存缩略图
+        const luminagsDir = path.join(projectConfig.outputPath, '.luminags');
+        await fs.promises.mkdir(luminagsDir, { recursive: true });
+        
+        // 生成缩略图文件名
+        const thumbnailFileName = `thumbnail_${Date.now()}.png`;
+        thumbnailPath = path.join(luminagsDir, thumbnailFileName);
+        
+        // 解码并保存 Base64 图片
+        const base64Data = thumbnailBase64.replace(/^data:image\/png;base64,/, '');
+        await fs.promises.writeFile(thumbnailPath, base64Data, 'base64');
+        
+        console.log(`[保存项目] ✓ 缩略图已保存：${thumbnailPath}`);
+      } catch (thumbError) {
+        console.error('[保存项目] 保存缩略图失败:', thumbError);
+        // 不阻断后续流程
+      }
+    }
+    
+    // 3. 更新项目状态为已完成
+    await projectManager.updateProject(projectId, {
+      status: 'completed'
+    });
+    
+    // 4. 更新项目索引，添加缩略图路径
+    const projectIndex = projectManager.projects.find(p => p.projectId === projectId);
+    if (projectIndex) {
+      projectIndex.thumbnailPath = thumbnailPath;
+      await projectManager.saveProjects();
+    }
+    
+    console.log(`[保存项目] ✓ 项目已成功保存到列表：${projectId}`);
+    
+    return { 
+      success: true, 
+      message: '项目已保存到列表',
+      projectId,
+      thumbnailPath
+    };
+  } catch (error) {
+    console.error('[保存项目] 保存失败:', error);
+    return { success: false, error: error.message };
+  }
 });
 
 // 确认退出应用

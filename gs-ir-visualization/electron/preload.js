@@ -43,6 +43,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   selectFile: (options) => ipcRenderer.invoke('select-file', options),
   // ✅ 新增：检查文件夹是否为空
   checkFolderEmpty: (folderPath) => ipcRenderer.invoke('check-folder-empty', folderPath),
+  // ✅ 新增：检查文件是否存在
+  checkFileExists: (filePath) => ipcRenderer.invoke('check-file-exists', filePath),
   // 数据集管理
   checkDatasetFormat: (sourcePath) => ipcRenderer.invoke('check-dataset-format', sourcePath),
   convertDataset: (config) => ipcRenderer.invoke('convert-dataset', config),
@@ -73,7 +75,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 更新项目配置（实时自动保存）
   updateProjectConfig: (projectId, config) => ipcRenderer.invoke('update-project-config', { projectId, config }),
   // 更新项目阶段
-  updateProjectStage: (projectId, stage) => ipcRenderer.invoke('update-project-stage', { projectId, stage })
+  updateProjectStage: (projectId, stage) => ipcRenderer.invoke('update-project-stage', { projectId, stage }),
+  // 删除项目输出目录
+  deleteOutputDirectory: (outputPath) => ipcRenderer.invoke('delete-output-directory', outputPath),
+  // 删除项目及其输出
+  deleteProjectAndOutput: (projectId, outputPath) => ipcRenderer.invoke('delete-project-and-output', { projectId, outputPath }),
+  // 保存训练完成的项目到项目列表
+  saveToProjectsList: (data) => ipcRenderer.invoke('save-to-projects-list', data)
 });
 
 // 监听窗口状态变化
