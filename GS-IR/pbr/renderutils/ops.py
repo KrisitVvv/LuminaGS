@@ -36,7 +36,7 @@ def _get_plugin():
                     return paths[0]
 
         # If cl.exe is not on path, try to find it.
-        if os.system("where cl.exe >nul 2>nul") != 0:
+        if os.system("where.exe cl.exe >nul 2>nul") != 0:
             cl_path = find_cl_path()
             if cl_path is None:
                 raise RuntimeError("Could not locate a supported Microsoft Visual C++ installation")

@@ -1,1 +1,4 @@
 gs-ir-visualization/node_modules
+
+# 排除项目配置文件
+gs-ir-visualization/.projects/

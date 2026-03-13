@@ -1,6 +1,10 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  // 系统信息相关 API
+  getPlatform: () => ipcRenderer.invoke('get-platform'),
+  // ✅ 新增：将本地文件路径转换为可访问的 URL
+  convertFilePath: (filePath) => ipcRenderer.invoke('convert-file-path', filePath),
   minimizeWindow: () => ipcRenderer.invoke('minimize-window'),
   maximizeWindow: () => ipcRenderer.invoke('maximize-window'),
   restoreWindow: () => ipcRenderer.invoke('restore-window'),
@@ -41,16 +45,53 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 文件和目录选择
   selectDirectory: () => ipcRenderer.invoke('select-directory'),
   selectFile: (options) => ipcRenderer.invoke('select-file', options),
+  // ✅ 新增：检查文件夹是否为空
+  checkFolderEmpty: (folderPath) => ipcRenderer.invoke('check-folder-empty', folderPath),
+  // ✅ 新增：检查文件是否存在
+  checkFileExists: (filePath) => ipcRenderer.invoke('check-file-exists', filePath),
   // 数据集管理
   checkDatasetFormat: (sourcePath) => ipcRenderer.invoke('check-dataset-format', sourcePath),
   convertDataset: (config) => ipcRenderer.invoke('convert-dataset', config),
+  stopConversion: () => ipcRenderer.invoke('stop-conversion'),
+  // 监听转换输出
+  onConversionOutput: (callback) => {
+    ipcRenderer.on('conversion-output', (event, data) => callback(data));
+  },
+  onConversionClose: (callback) => {
+    ipcRenderer.on('conversion-close', (event, data) => callback(data));
+  },
+  // 获取最新渲染图像
+  getLatestRenderedImage: (modelPath) => ipcRenderer.invoke('get-latest-rendered-image', modelPath),
   // 监听训练和烘焙输出
   onTrainingOutput: (callback) => {
     ipcRenderer.on('training-output', (event, data) => callback(data));
   },
   onBakingOutput: (callback) => {
     ipcRenderer.on('baking-output', (event, data) => callback(data));
-  }
+  },
+  // 项目管理相关 API
+  getProjectList: () => ipcRenderer.invoke('get-project-list'),
+  getProjectDetail: (projectId) => ipcRenderer.invoke('get-project-detail', projectId),
+  getQueueStatus: () => ipcRenderer.invoke('get-queue-status'),
+  onTrainingQueueUpdate: (callback) => {
+    ipcRenderer.on('training-queue-update', (event, data) => callback(data));
+  },
+  // 更新项目配置（实时自动保存）
+  updateProjectConfig: (projectId, config) => ipcRenderer.invoke('update-project-config', { projectId, config }),
+  // 更新项目阶段
+  updateProjectStage: (projectId, stage) => ipcRenderer.invoke('update-project-stage', { projectId, stage }),
+  // ✅ 新增：检查训练是否完成
+  checkTrainingCompletion: (projectId) => ipcRenderer.invoke('check-training-completion', projectId),
+  // 监听训练完成事件
+  onTrainingCompleted: (callback) => {
+    ipcRenderer.on('training-completed', (event, data) => callback(data));
+  },
+  // 删除项目输出目录
+  deleteOutputDirectory: (outputPath) => ipcRenderer.invoke('delete-output-directory', outputPath),
+  // 删除项目及其输出
+  deleteProjectAndOutput: (projectId, outputPath) => ipcRenderer.invoke('delete-project-and-output', { projectId, outputPath }),
+  // 保存训练完成的项目到项目列表
+  saveToProjectsList: (data) => ipcRenderer.invoke('save-to-projects-list', data)
 });
 
 // 监听窗口状态变化

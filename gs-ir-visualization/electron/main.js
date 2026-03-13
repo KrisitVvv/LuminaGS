@@ -1,19 +1,50 @@
-const { app, BrowserWindow, Menu, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, dialog, protocol } = require('electron');
 const si = require('systeminformation');
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs').promises;
 const PythonEnvironmentManager = require('./pythonEnvironment');
+const ProjectManager = require('./projectManager');
 
 Menu.setApplicationMenu(null);
 let mainWindow = null;
 const isPackaged = app.isPackaged;
 
+// 注册自定义协议 luma:// 用于访问本地文件
+protocol.registerSchemesAsPrivileged([{
+  scheme: 'luma',
+  privileges: {
+    standard: true,
+    secure: true,
+    supportFetchApi: true,
+    corsEnabled: false,
+    allowServiceWorkers: false,
+    bypassCSP: false,
+    stream: false
+  }
+}]);
+
 // 初始化 Python 环境管理器
 const envManager = new PythonEnvironmentManager();
 
+// ✅ 辅助函数：获取图片的 MIME 类型
+function getImageMimeType(ext) {
+  const mimeTypes = {
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
+    '.svg': 'image/svg+xml'
+  };
+  return mimeTypes[ext] || 'application/octet-stream';
+}
+
 // 将 mainWindow 暴露给全局，供环境管理模块使用
 global.mainWindow = null;
+
+// 初始化项目管理器
+const projectManager = new ProjectManager();
 
 const createWindow = () => {
   mainWindow = new BrowserWindow({
@@ -24,7 +55,11 @@ const createWindow = () => {
     webPreferences: {
       nodeIntegration: false, 
       contextIsolation: true,
-      preload: __dirname + '/preload.js'
+      preload: __dirname + '/preload.js',
+      // 允许加载本地文件
+      webviewTag: true,
+      // 允许跨域请求本地文件
+      sandbox: false
     }
   })
 
@@ -133,6 +168,62 @@ ipcMain.handle('select-directory', async (event) => {
   }
 });
 
+// 检查文件夹是否为空
+ipcMain.handle('check-folder-empty', async (event, folderPath) => {
+  try {
+    if (!folderPath) {
+      return { success: false, error: '文件夹路径为空' };
+    }
+    
+    // 检查路径是否存在
+    try {
+      await fs.access(folderPath);
+    } catch (err) {
+      // 路径不存在，认为是空的
+      return { success: true, isEmpty: true, exists: false, fileCount: 0 };
+    }
+    
+    // 读取文件夹内容
+    const files = await fs.readdir(folderPath);
+    const fileCount = files.length;
+    const isEmpty = fileCount === 0;
+    
+    console.log(`[FolderCheck] 路径：${folderPath}, 存在：true, 文件数：${fileCount}, 空：${isEmpty}`);
+    
+    return {
+      success: true,
+      exists: true,
+      isEmpty: isEmpty,
+      fileCount: fileCount,
+      files: files.slice(0, 10) // 只返回前 10 个文件名用于提示
+    };
+  } catch (error) {
+    console.error('[FolderCheck] 检查失败:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// 检查文件是否存在
+ipcMain.handle('check-file-exists', async (event, filePath) => {
+  try {
+    if (!filePath) {
+      return { success: false, error: '文件路径为空' };
+    }
+    
+    try {
+      await fs.access(filePath);
+      console.log(`[FileCheck] 文件存在：${filePath}`);
+      return { success: true, exists: true };
+    } catch (err) {
+      console.log(`[FileCheck] 文件不存在：${filePath}`);
+      return { success: true, exists: false };
+    }
+  } catch (error) {
+    console.error('[FileCheck] 检查失败:', error);
+    return { success: false, error: error.message };
+  }
+});
+
 ipcMain.handle('select-file', async (event, options = {}) => {
   try {
     if (!mainWindow) {
@@ -155,13 +246,58 @@ ipcMain.handle('select-file', async (event, options = {}) => {
   }
 });
 
-// 存储当前选中的GPU索引
+// 存储当前选中的 GPU 索引
 let currentSelectedGpuIndex = -1;
 
 // 存储当前训练进程
 let trainingProcess = null;
 let bakingProcess = null;
 let conversionProcess = null;
+let conversionCancelled = false; // 标记转换是否被用户取消
+
+// 当前正在训练的项目 ID
+let currentTrainingProjectId = null;
+
+// 训练任务队列管理
+const trainingQueue = [];
+let isTrainingActive = false; // 标记是否有训练正在进行
+
+// 从队列中启动下一个训练任务
+async function startNextTrainingTask() {
+  if (trainingQueue.length === 0 || isTrainingActive) {
+    return;
+  }
+  
+  isTrainingActive = true;
+  const nextTask = trainingQueue.shift(); // 获取第一个任务
+  
+  try {
+    console.log('[Queue] 启动队列中的下一个任务:', nextTask.projectName);
+    
+    // 更新项目状态为训练中
+    if (nextTask.projectId) {
+      await projectManager.updateProjectStatus(nextTask.projectId, 'training');
+      currentTrainingProjectId = nextTask.projectId;
+    }
+    
+    // 通知前端任务开始
+    mainWindow.webContents.send('training-queue-update', {
+      type: 'task-started',
+      projectId: nextTask.projectId,
+      projectName: nextTask.projectName
+    });
+    
+    // 执行实际的训练启动逻辑（直接在这里调用原逻辑）
+    await startTrainingProcess(nextTask.config, nextTask.projectId);
+  } catch (error) {
+    console.error('[Queue] 启动队列任务失败:', error);
+    if (nextTask.projectId) {
+      await projectManager.updateProjectStatus(nextTask.projectId, 'error');
+    }
+    isTrainingActive = false;
+    startNextTrainingTask(); // 尝试启动下一个
+  }
+}
 
 // 设置选中 GPU 索引
 ipcMain.handle('set-selected-gpu-index', async (event, index) => {
@@ -173,13 +309,204 @@ ipcMain.handle('set-selected-gpu-index', async (event, index) => {
 // 训练相关 IPC 处理
 ipcMain.handle('start-training', async (event, config) => {
   try {
-    // 检查环境是否就绪
-    const validation = await envManager.validateEnvironment();
-    if (!validation.valid) {
-      throw new Error(`Python 环境未就绪：${validation.error}`);
+    const { 
+      modelPath, 
+      sourcePath, 
+      iterations, 
+      eval: evalMode, 
+      gamma,   // 训练时使用的参数（Stage1 时为 false）
+      indirect,  // 训练时使用的参数（Stage1 时为 false）
+      checkpoint, 
+      resolution, 
+      imageSubdir,
+      projectName,
+      // 新增：提取用户的真实参数
+      userGamma,
+      userIndirect,
+      userCheckpoint,
+      userBound,
+      userOccluRes,
+      userOcclusion
+    } = config;
+    
+    // 创建项目（如果提供了项目名称）
+    // 注意：如果是 Stage2（有 checkpoint），不创建新项目，而是更新现有项目
+    let projectId = config.projectId || null;
+    let projectConfigFile = null;
+    
+    if (projectName && !config.checkpoint) {
+      // Stage1: 创建新项目
+      console.log('[Training] 创建新项目:', projectName);
+      
+      // 关键：使用用户的真实参数保存，而不是训练时的固定参数
+      const saveGamma = (userGamma !== undefined) ? userGamma : gamma;
+      const saveIndirect = (userIndirect !== undefined) ? userIndirect : indirect;
+      const saveCheckpoint = (userCheckpoint !== undefined) ? userCheckpoint : checkpoint;
+      const saveBound = (userBound !== undefined) ? userBound : 1.5;
+      const saveOccluRes = (userOccluRes !== undefined) ? userOccluRes : 128;
+      const saveOcclusion = (userOcclusion !== undefined) ? userOcclusion : 0.01;
+      
+      console.log('[Training] 参数对比 - 训练使用:', { gamma, indirect }, '| 用户选择:', { userGamma, userIndirect }, '| 最终保存:', { saveGamma, saveIndirect });
+      
+      const projectResult = await projectManager.createProject({
+        projectName,
+        outputPath: modelPath,
+        sourcePath,
+        stage: 'stage1',
+        totalIterations: iterations,
+        resolution,
+        evalMode,
+        gamma: saveGamma,  // ✅ 使用用户的真实选择
+        indirect: saveIndirect,  // ✅ 使用用户的真实选择
+        bound: saveBound,
+        occluRes: saveOccluRes,
+        occlusion: saveOcclusion,
+        checkpoint: saveCheckpoint  // ✅ 使用用户的真实 checkpoint
+      });
+      
+      if (projectResult.success) {
+        projectId = projectResult.projectId;
+        projectConfigFile = projectResult.configFile;
+        currentTrainingProjectId = projectId;
+        console.log('[Training] 项目创建成功:', projectId);
+      } else {
+        console.warn('[Training] 项目创建失败，继续训练:', projectResult.error);
+      }
+    } else if (projectId && config.checkpoint) {
+      // Stage2: 更新现有项目阶段为 stage2
+      console.log('[Training] Stage2 训练，更新现有项目:', projectId);
+      try {
+        await projectManager.updateProjectStage(projectId, 'stage2');
+        console.log('[Training] 项目阶段已更新为 stage2');
+        currentTrainingProjectId = projectId;
+      } catch (error) {
+        console.warn('[Training] 更新项目阶段失败:', error);
+      }
     }
     
-    const { modelPath, sourcePath, iterations, eval: evalMode, gamma, indirect, checkpoint, resolution } = config;
+    // 实现队列逻辑：如果有训练正在进行，将任务加入队列
+    if (isTrainingActive && trainingProcess) {
+      console.log('[Queue] 训练正在进行中，将任务加入队列');
+      
+      // 将任务加入队列
+      trainingQueue.push({
+        config,
+        projectId,
+        projectName: projectName || '未命名'
+      });
+      
+      // 更新项目状态为等待中
+      if (projectId) {
+        await projectManager.updateProjectStatus(projectId, 'waiting');
+      }
+      
+      // 通知前端任务已进入队列
+      mainWindow.webContents.send('training-queue-update', {
+        type: 'task-queued',
+        projectId,
+        projectName: projectName || '未命名',
+        queueLength: trainingQueue.length
+      });
+      
+      return { 
+        success: true, 
+        queued: true, 
+        message: '训练已加入队列，等待前一个任务完成',
+        queuePosition: trainingQueue.length
+      };
+    }
+        
+    // 检查数据集格式是否需要转换
+    mainWindow.webContents.send('training-output', { 
+      type: 'stdout', 
+      data: '\n========== 数据集格式检查 ==========\n' 
+    });
+    
+    // 检查关键目录是否存在
+    const sparsePath = path.join(sourcePath, 'sparse/0');
+    const imagesPath = path.join(sourcePath, 'images');
+    
+    const sparseExists = await fs.access(sparsePath).then(() => true).catch(() => false);
+    const imagesExists = await fs.access(imagesPath).then(() => true).catch(() => false);
+    
+    let needsConversion = false;
+    
+    if (!sparseExists || !imagesExists) {
+      needsConversion = true;
+      mainWindow.webContents.send('training-output', { 
+        type: 'stdout', 
+        data: '需要运行 convert.py 进行数据集转换\n' 
+      });
+      
+      mainWindow.webContents.send('training-output', { 
+        type: 'stdout', 
+        data: '开始执行 python convert.py -s ' + sourcePath + '\n\n' 
+      });
+      
+      // 准备转换脚本参数
+      const convertScriptPath = path.join(__dirname, '../../tools/gaussian-splatting/convert.py');
+      const convertArgs = ['-s', sourcePath];
+      
+      // 验证脚本文件是否存在
+      const scriptExists = await fs.access(convertScriptPath).then(() => true).catch(() => false);
+      if (!scriptExists) {
+        throw new Error(`找不到转换脚本：${convertScriptPath}`);
+      }
+      
+      mainWindow.webContents.send('training-output', { 
+        type: 'stdout', 
+        data: `转换脚本：${convertScriptPath}\n` 
+      });
+      
+      // 运行转换脚本 - 只执行 python convert.py -s <filedir>
+      const convertProcess = envManager.runPythonScript(convertScriptPath, convertArgs, {
+        cwd: path.join(__dirname, '../../tools/gaussian-splatting'),
+        env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
+      });
+      
+      // 等待转换完成
+      await new Promise((resolve, reject) => {
+        convertProcess.stdout.on('data', (data) => {
+          const output = data.toString();
+          console.log('[CONVERT]', output);
+          mainWindow.webContents.send('training-output', { type: 'stdout', data: output });
+        });
+        
+        convertProcess.stderr.on('data', (data) => {
+          const output = data.toString();
+          console.error('[CONVERT ERROR]', output);
+          mainWindow.webContents.send('training-output', { type: 'stderr', data: output });
+        });
+        
+        convertProcess.on('close', (code) => {
+          console.log(`[CONVERT] 进程退出，代码：${code}`);
+          if (code === 0) {
+            resolve();
+          } else {
+            reject(new Error(`转换失败，退出代码：${code}`));
+          }
+        });
+        
+        convertProcess.on('error', (err) => {
+          console.error('[CONVERT] 进程错误:', err);
+          reject(err);
+        });
+      });
+      
+      mainWindow.webContents.send('training-output', { 
+        type: 'stdout', 
+        data: '\n✓ 数据集转换完成！\n\n' 
+      });
+    } else {
+      mainWindow.webContents.send('training-output', { 
+        type: 'stdout', 
+        data: '✓ 数据集格式检查通过 (COLMAP 格式已存在)\n' 
+      });
+      mainWindow.webContents.send('training-output', { 
+        type: 'stdout', 
+        data: '========================================\n\n' 
+      });
+    }
     
     // 构建命令参数
     const args = [
@@ -188,29 +515,205 @@ ipcMain.handle('start-training', async (event, config) => {
       '--iterations', iterations.toString()
     ];
     
+    // 添加图片子目录参数
+    if (imageSubdir && imageSubdir !== 'images') {
+      args.push('-i', imageSubdir);
+    }
+    
     if (evalMode) args.push('--eval');
     if (gamma) args.push('--gamma');
     if (indirect) args.push('--indirect');
+    
+    // 处理分辨率参数
+    // 根据实际使用的 imageSubdir 和 resolution 决定 -r 参数
+    // - 如果使用 images 目录（原图），-r = resolution（完整的压缩比例）
+    // - 如果使用 images_X 目录（已压缩），-r = resolution / X（二次压缩）
+    let finalResolutionParam = null;
     if (resolution && resolution > 1) {
-      args.push('-r', resolution.toString());
+      finalResolutionParam = resolution;
+          
+      // 如果使用了预压缩目录，需要调整 -r 参数
+      if (imageSubdir === 'images_2' && resolution === 2) {
+        // 1/2 分辨率 + images_2 目录：不需要额外压缩
+        finalResolutionParam = 1;
+      } else if (imageSubdir === 'images_4') {
+        if (resolution === 4) {
+          // 1/4 分辨率 + images_4 目录：不需要额外压缩
+          finalResolutionParam = 1;
+        } else if (resolution === 8) {
+          // 1/8 分辨率 + images_4 目录：需要再压缩 2 倍
+          finalResolutionParam = 2;
+        } else if (resolution === 16) {
+          // 1/16 分辨率 + images_4 目录：需要再压缩 4 倍
+          finalResolutionParam = 4;
+        }
+      } else if (imageSubdir === 'images_8') {
+        if (resolution === 8) {
+          // 1/8 分辨率 + images_8 目录：不需要额外压缩
+          finalResolutionParam = 1;
+        } else if (resolution === 16) {
+          // 1/16 分辨率 + images_8 目录：需要再压缩 2 倍
+          finalResolutionParam = 2;
+        }
+      }
+      // 其他情况（使用 images 目录）：finalResolutionParam = resolution
+          
+      if (finalResolutionParam > 1) {
+        args.push('-r', finalResolutionParam.toString());
+      }
     }
+    
+    // 输出调试信息
+    console.log(`分辨率设置：目标=${resolution}, imageSubdir="${imageSubdir}", 实际 -r 参数=${finalResolutionParam || '未设置'}`);
+    mainWindow.webContents.send('training-output', { 
+      type: 'stdout', 
+      data: `📊 分辨率配置：目标 1/${resolution} | 使用目录：${imageSubdir} | -r 参数：${finalResolutionParam || '1(不压缩)'}\n` 
+    });
+    
     if (checkpoint) {
       args.push('--start_checkpoint', checkpoint);
     }
     
-    console.log('启动训练进程:', envManager.pythonPath, args.join(' '));
+   console.log('启动训练进程:', envManager.pythonPath, args.join(' '));
     
-    // 使用环境管理器运行 Python 脚本
-    trainingProcess = envManager.runPythonScript(
-      path.join(__dirname, '../../GS-IR/train.py'),
-      args,
-      { cwd: path.join(__dirname, '../../GS-IR') }
-    );
+    // 标记训练已激活
+    isTrainingActive = true;
+    
+    // 构建完整的命令：先激活 conda 环境，再执行 Python 脚本
+   const pythonScriptPath = path.join(__dirname, '../../GS-IR/train.py');
+   const cwd = path.join(__dirname, '../../GS-IR');
+    
+  if (process.platform === 'win32') {
+        // Windows: 使用 PowerShell 执行 conda activate && python train.py
+    const ninjaPath = process.env.NINJA_PATH || path.join(path.dirname(envManager.pythonPath), 'Scripts\\ninja.exe');
+    const ninjaDir = path.dirname(ninjaPath);
+    // 将 Ninja 目录添加到 PATH，并设置 NINJA_PATH 环境变量
+    const fullCommand = `conda activate gsir;$env:PATH='${ninjaDir};' + $env:PATH;$env:NINJA_PATH='${ninjaPath}'; & '${envManager.pythonPath}' '${pythonScriptPath}' ${args.join(' ')}`;
+     console.log('执行完整命令:', fullCommand);
+        console.log('Ninja 路径:', ninjaPath);
+        
+     trainingProcess = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', fullCommand], {
+         env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
+        });
+    } else {
+        // Unix/Linux/macOS: 使用 bash -c "source activate gsir && python train.py ..."
+     const fullCommand = `cd '${cwd}' && source activate gsir && '${envManager.pythonPath}' '${pythonScriptPath}' ${args.join(' ')}`;
+     console.log('执行完整命令:', fullCommand);
+        
+     trainingProcess = spawn('bash', ['-c', fullCommand], {
+         env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
+        });
+    }
     
     trainingProcess.stdout.on('data', (data) => {
       const output = data.toString();
       console.log('训练输出:', output);
       mainWindow.webContents.send('training-output', { type: 'stdout', data: output });
+      
+      // 解析 TRAINING_STATE_UPDATE 消息并更新项目状态
+      if (projectId && output.includes('TRAINING_STATE_UPDATE:')) {
+        try {
+          const jsonMatch = output.match(/TRAINING_STATE_UPDATE:\s*(\{.+\})/);
+          if (jsonMatch) {
+            const stateData = JSON.parse(jsonMatch[1]);
+            console.log('[Training] 解析到状态更新:', stateData);
+            
+            // 更新项目状态（注意：每 100 次迭代时 psnr/ssim 为 null）
+            projectManager.updateProject(projectId, {
+              currentIteration: stateData.iter,
+              loss: stateData.loss,
+              psnr: stateData.psnr,
+              ssim: stateData.ssim,
+              previewPath: stateData.preview,
+              status: 'training'
+            }).then(result => {
+              if (result.success) {
+                console.log('[Training] 项目状态已更新');
+              } else {
+                console.warn('[Training] 项目状态更新失败:', result.error);
+              }
+            });
+          }
+        } catch (error) {
+          console.error('[Training] 解析 TRAINING_STATE_UPDATE 失败:', error);
+        }
+      }
+      
+      // ⚠️ 解析评估数据（每 1000 次迭代）
+      // 注意：Python 会输出 test 和 train 两次评估，我们只解析一次
+      if (projectId) {
+        // 尝试匹配 test 或 train 的评估行
+        const evalTestMatch = output.match(/\[ITER\s+(\d+)\]\s+Evaluating\s+test:\s+L1\s+([\d.]+)\s+PSNR:\s*([\d.]+)\s+SSIM\s+([\d.]+)/);
+        const evalTrainMatch = output.match(/\[ITER\s+(\d+)\]\s+Evaluating\s+train:\s+L1\s+([\d.]+)\s+PSNR:\s*([\d.]+)\s+SSIM\s+([\d.]+)/);
+        
+        // 解析 EVAL_TEST_* 和 EVAL_TRAIN_* 指标
+        const evalTestL1Match = output.match(/EVAL_TEST_L1:\s*([\d.]+)/);
+        const evalTestPsnrMatch = output.match(/EVAL_TEST_PSNR:\s*([\d.]+)/);
+        const evalTestSsimMatch = output.match(/EVAL_TEST_SSIM:\s*([\d.]+)/);
+        
+        const evalTrainL1Match = output.match(/EVAL_TRAIN_L1:\s*([\d.]+)/);
+        const evalTrainPsnrMatch = output.match(/EVAL_TRAIN_PSNR:\s*([\d.]+)/);
+        const evalTrainSsimMatch = output.match(/EVAL_TRAIN_SSIM:\s*([\d.]+)/);
+        
+        // ⚠️ 优先使用 train 评估（更准确），如果没有则使用 test 评估
+        const evalMatch = evalTrainMatch || evalTestMatch;
+        const evalType = evalTrainMatch ? 'train' : (evalTestMatch ? 'test' : null);
+        
+        if (evalMatch || evalTrainL1Match || evalTestL1Match) {
+          const iter = evalMatch ? parseInt(evalMatch[1]) : null;
+          const l1 = evalMatch ? parseFloat(evalMatch[2]) : null;
+          const psnr = evalMatch ? parseFloat(evalMatch[3]) : null;
+          const ssim = evalMatch ? parseFloat(evalMatch[4]) : null;
+          
+          // 从 EVAL_*_L1 等提取评估 L1（独立指标）
+          const evalL1 = evalTrainL1Match ? parseFloat(evalTrainL1Match[1]) : 
+                        (evalTestL1Match ? parseFloat(evalTestL1Match[1]) : null);
+          const evalPsnr = evalTrainPsnrMatch ? parseFloat(evalTrainPsnrMatch[1]) :
+                          (evalTestPsnrMatch ? parseFloat(evalTestPsnrMatch[1]) : null);
+          const evalSsim = evalTrainSsimMatch ? parseFloat(evalTrainSsimMatch[1]) :
+                          (evalTestSsimMatch ? parseFloat(evalTestSsimMatch[1]) : null);
+          
+          // ⚠️ 只在第一次解析到时处理（避免重复）
+          if (iter !== null && l1 !== null) {
+            console.log(`[Training] ✓ 解析到${evalType ? evalType.toUpperCase() : ''}评估数据 - iter: ${iter}, L1: ${l1}, PSNR: ${psnr}, SSIM: ${ssim}`);
+            
+            // 更新项目状态，包含 PSNR、SSIM 和评估 L1
+            // ⚠️ 注意：loss 字段应该已经在 TRAINING_STATE_UPDATE 中设置过了
+            // 这里只更新 PSNR、SSIM 和 Eval L1
+            const projectUpdateData = {
+              currentIteration: iter,
+              psnr: psnr,
+              ssim: ssim,
+              evalL1: evalL1,  // 评估 L1（单独保存）
+              evalL1Type: evalType,  // 'test' 或 'train'
+              status: 'training'
+              // ✅ 注意：不包含 loss 字段，避免覆盖常规训练的 Loss
+            };
+            
+            projectManager.updateProject(projectId, projectUpdateData).then(result => {
+              if (result.success) {
+                console.log('[Training] ✓ 评估数据已保存');
+                
+                // 同时发送一个补充的 TRAINING_STATE_UPDATE 给前端
+                // ⚠️ 注意：使用闭包中的变量 evalL1 和 l1Type
+                mainWindow.webContents.send('training-output', {
+                  type: 'eval-update',
+                  data: {
+                    iter,
+                    loss: null,  // ✅ 明确设置为 null，不使用评估 L1
+                    psnr,
+                    ssim,
+                    evalL1: evalL1,  // 评估 L1
+                    evalL1Type: evalType
+                  }
+                });
+              } else {
+                console.warn('[Training] 评估数据保存失败:', result.error);
+              }
+            });
+          }
+        }
+      }
     });
     
     trainingProcess.stderr.on('data', (data) => {
@@ -223,6 +726,29 @@ ipcMain.handle('start-training', async (event, config) => {
       console.log(`训练进程退出，代码：${code}`);
       mainWindow.webContents.send('training-output', { type: 'close', code });
       trainingProcess = null;
+      
+      // 更新项目状态为完成
+      if (projectId) {
+        const finalStatus = code === 0 ? 'completed' : 'error';
+        projectManager.updateProject(projectId, {
+          status: finalStatus
+        }).then(() => {
+          console.log(`[Training] 项目状态已更新为：${finalStatus}`);
+          currentTrainingProjectId = null;
+          isTrainingActive = false;
+          
+          // 启动队列中的下一个任务
+          console.log('[Queue] 当前训练结束，检查队列...');
+          startNextTrainingTask();
+        }).catch(err => {
+          console.error('[Training] 更新项目状态失败:', err);
+          isTrainingActive = false;
+          startNextTrainingTask();
+        });
+      } else {
+        isTrainingActive = false;
+        startNextTrainingTask();
+      }
     });
     
     return { success: true };
@@ -234,13 +760,18 @@ ipcMain.handle('start-training', async (event, config) => {
 
 ipcMain.handle('start-baking', async (event, config) => {
   try {
-    // 检查环境是否就绪
-    const validation = await envManager.validateEnvironment();
-    if (!validation.valid) {
-      throw new Error(`Python 环境未就绪：${validation.error}`);
+    const { modelPath, checkpoint, bound, occluRes, occlusion, projectId } = config;
+      
+    // 如果有 projectId，更新项目阶段为 baking
+    if (projectId) {
+    try {
+        await projectManager.updateProjectStage(projectId, 'baking');
+      console.log(`[Baking] 项目 ${projectId} 阶段已更新为 baking`);
+      } catch (stageError) {
+      console.error('[Baking] 更新项目阶段失败:', stageError);
+        // 不阻断后续流程
+      }
     }
-    
-    const { modelPath, checkpoint, bound, occluRes, occlusion } = config;
     
     // 构建命令参数
     const args = [
@@ -264,6 +795,42 @@ ipcMain.handle('start-baking', async (event, config) => {
       const output = data.toString();
       console.log('烘焙输出:', output);
       mainWindow.webContents.send('baking-output', { type: 'stdout', data: output });
+      
+      // ✅ 新增：解析 Baking 进度并保存状态
+      if (projectId && output) {
+        try {
+          // 解析进度百分比
+          const progressMatch = output.match(/(\d+)%/);
+          if (progressMatch) {
+            const progress = parseInt(progressMatch[1]);
+            console.log(`[Baking] 解析到进度：${progress}%`);
+            
+            // 更新项目状态
+            projectManager.updateProject(projectId, {
+              currentIteration: progress,  // 使用进度作为迭代次数
+              status: 'baking'
+            }).then(result => {
+              if (result.success) {
+                console.log('[Baking] ✓ 进度已保存');
+              } else {
+                console.warn('[Baking] 进度保存失败:', result.error);
+              }
+            });
+          }
+          
+          // 解析完成消息
+          if (output.includes('save occlusion volumes') || output.includes('occlusion_volumes.pth')) {
+            console.log('[Baking] ✓ 检测到 Baking 完成');
+            
+            // 更新项目阶段为 stage2（准备进入下一阶段）
+            projectManager.updateProjectStage(projectId, 'stage2').then(() => {
+              console.log('[Baking] ✓ 项目阶段已更新为 stage2');
+            });
+          }
+        } catch (error) {
+          console.error('[Baking] 解析输出失败:', error);
+        }
+      }
     });
     
     bakingProcess.stderr.on('data', (data) => {
@@ -275,6 +842,31 @@ ipcMain.handle('start-baking', async (event, config) => {
     bakingProcess.on('close', (code) => {
       console.log(`烘焙进程退出，代码：${code}`);
       mainWindow.webContents.send('baking-output', { type: 'close', code });
+      
+      // ✅ 新增：Baking 完成后更新项目状态
+      if (projectId) {
+        if (code === 0) {
+          // 成功完成
+          projectManager.updateProject(projectId, {
+            status: 'completed',
+            stage: 'stage2'  // 自动进入 Stage2 阶段
+          }).then(result => {
+            if (result.success) {
+              console.log('[Baking] ✓ 项目状态已更新为 completed');
+            }
+          });
+        } else {
+          // 发生错误
+          projectManager.updateProject(projectId, {
+            status: 'error'
+          }).then(result => {
+            if (result.success) {
+              console.log('[Baking] ✓ 项目状态已更新为 error');
+            }
+          });
+        }
+      }
+      
       bakingProcess = null;
     });
     
@@ -287,26 +879,244 @@ ipcMain.handle('start-baking', async (event, config) => {
 
 ipcMain.handle('stop-training', async () => {
   try {
+    console.log('===== 收到停止训练请求 =====');
+    
     if (trainingProcess) {
-      trainingProcess.kill();
-      trainingProcess = null;
-      return { success: true };
+      const pid = trainingProcess.pid;
+      console.log('[停止训练] 当前训练进程 PID:', pid);
+      console.log('[停止训练] 进程对象信息:', {
+        killed: trainingProcess.killed,
+        exitCode: trainingProcess.exitCode,
+        signalCode: trainingProcess.signalCode
+      });
+      
+      // Windows 上使用 taskkill 强制终止进程树
+      if (process.platform === 'win32') {
+        const { spawn } = require('child_process');
+        
+        console.log('[停止训练] Windows 平台，使用 taskkill 终止进程树...');
+        
+        return new Promise((resolve) => {
+          try {
+            const taskkill = spawn('taskkill', ['/pid', pid.toString(), '/f', '/t']);
+            
+            let stdout = '';
+            let stderr = '';
+            
+            taskkill.stdout.on('data', (data) => {
+              const output = data.toString();
+              stdout += output;
+              console.log('[taskkill stdout]', output);
+            });
+            
+            taskkill.stderr.on('data', (data) => {
+              const output = data.toString();
+              stderr += output;
+              console.error('[taskkill stderr]', output);
+            });
+            
+            taskkill.on('close', (code) => {
+              console.log('[taskkill] 进程退出，代码:', code);
+              
+              if (code === 0) {
+                console.log('[停止训练] 成功终止训练进程及其子进程');
+                trainingProcess = null;
+                resolve({ success: true, message: '训练进程已停止' });
+              } else {
+                console.error('[停止训练] taskkill 失败，代码:', code, stderr);
+                // 尝试备用方案：直接 kill
+                try {
+                  trainingProcess.kill('SIGKILL');
+                  console.log('[停止训练] 使用 SIGKILL 备用方案成功');
+                  trainingProcess = null;
+                  resolve({ success: true, message: '训练进程已通过备用方案停止' });
+                } catch (killError) {
+                  console.error('[停止训练] 所有终止方法都失败:', killError);
+                  resolve({ success: false, error: `终止进程失败：${stderr || killError.message}` });
+                }
+              }
+            });
+            
+            taskkill.on('error', (err) => {
+              console.error('[taskkill] 进程启动失败:', err);
+              // 尝试备用方案
+              try {
+                trainingProcess.kill('SIGKILL');
+                console.log('[停止训练] 使用 SIGKILL 备用方案成功');
+                trainingProcess = null;
+                resolve({ success: true, message: '训练进程已通过备用方案停止' });
+              } catch (killError) {
+                resolve({ success: false, error: err.message });
+              }
+            });
+            
+            // 设置超时，防止 taskkill 挂起
+            setTimeout(() => {
+              console.warn('[停止训练] taskkill 超时 5 秒，强制清理...');
+              try {
+                trainingProcess.kill('SIGKILL');
+                trainingProcess = null;
+                resolve({ success: true, message: '训练进程通过超时机制停止' });
+              } catch (err) {
+                resolve({ success: false, error: '终止进程超时且失败' });
+              }
+            }, 5000);
+            
+          } catch (spawnError) {
+            console.error('[停止训练] 启动 taskkill 失败:', spawnError);
+            resolve({ success: false, error: spawnError.message });
+          }
+        });
+      } else {
+        // Unix/Linux/macOS 平台
+        console.log('[停止训练] Unix 平台，使用 SIGKILL 信号...');
+        trainingProcess.kill('SIGKILL');
+        trainingProcess = null;
+        console.log('[停止训练] 训练进程已停止');
+        return { success: true };
+      }
+    } else {
+      console.warn('[停止训练] 没有正在运行的训练进程');
+      return { success: false, error: '没有正在运行的训练进程' };
     }
-    return { success: false, error: '没有正在运行的训练进程' };
   } catch (error) {
+    console.error('[停止训练] 发生异常:', error);
+    console.error('[停止训练] 错误堆栈:', error.stack);
     return { success: false, error: error.message };
   }
 });
 
 ipcMain.handle('stop-baking', async () => {
   try {
+    console.log('===== 收到停止烘焙请求 =====');
+    
     if (bakingProcess) {
-      bakingProcess.kill();
-      bakingProcess = null;
+      const pid = bakingProcess.pid;
+      console.log('[停止烘焙] 当前烘焙进程 PID:', pid);
+      console.log('[停止烘焙] 进程对象信息:', {
+        killed: bakingProcess.killed,
+        exitCode: bakingProcess.exitCode,
+        signalCode: bakingProcess.signalCode
+      });
+      
+      // Windows 上使用 taskkill 强制终止进程树
+      if (process.platform === 'win32') {
+        const { spawn } = require('child_process');
+        
+        console.log('[停止烘焙] Windows 平台，使用 taskkill 终止进程树...');
+        
+        return new Promise((resolve) => {
+          try {
+            const taskkill = spawn('taskkill', ['/pid', pid.toString(), '/f', '/t']);
+            
+            let stdout = '';
+            let stderr = '';
+            
+            taskkill.stdout.on('data', (data) => {
+              const output = data.toString();
+              stdout += output;
+              console.log('[taskkill stdout]', output);
+            });
+            
+            taskkill.stderr.on('data', (data) => {
+              const output = data.toString();
+              stderr += output;
+              console.error('[taskkill stderr]', output);
+            });
+            
+            taskkill.on('close', (code) => {
+              console.log('[taskkill] 进程退出，代码:', code);
+              
+              if (code === 0) {
+                console.log('[停止烘焙] ✓ 成功终止烘焙进程及其子进程');
+                bakingProcess = null;
+                resolve({ success: true, message: '烘焙进程已停止' });
+              } else {
+                console.error('[停止烘焙] ✗ taskkill 失败，代码:', code, stderr);
+                // 尝试备用方案：直接 kill
+                try {
+                  bakingProcess.kill('SIGKILL');
+                  console.log('[停止烘焙] 使用 SIGKILL 备用方案成功');
+                  bakingProcess = null;
+                  resolve({ success: true, message: '烘焙进程已通过备用方案停止' });
+                } catch (killError) {
+                  console.error('[停止烘焙] ✗ 所有终止方法都失败:', killError);
+                  resolve({ success: false, error: `终止进程失败：${stderr || killError.message}` });
+                }
+              }
+            });
+            
+            taskkill.on('error', (err) => {
+              console.error('[taskkill] 进程启动失败:', err);
+              // 尝试备用方案
+              try {
+                bakingProcess.kill('SIGKILL');
+                console.log('[停止烘焙] 使用 SIGKILL 备用方案成功');
+                bakingProcess = null;
+                resolve({ success: true, message: '烘焙进程已通过备用方案停止' });
+              } catch (killError) {
+                resolve({ success: false, error: err.message });
+              }
+            });
+            
+            // 设置超时，防止 taskkill 挂起
+            setTimeout(() => {
+              console.warn('[停止烘焙] ⚠ taskkill 超时 5 秒，强制清理...');
+              try {
+                bakingProcess.kill('SIGKILL');
+                bakingProcess = null;
+                resolve({ success: true, message: '烘焙进程通过超时机制停止' });
+              } catch (err) {
+                resolve({ success: false, error: '终止进程超时且失败' });
+              }
+            }, 5000);
+            
+          } catch (spawnError) {
+            console.error('[停止烘焙] 启动 taskkill 失败:', spawnError);
+            resolve({ success: false, error: spawnError.message });
+          }
+        });
+      } else {
+        // Unix/Linux/macOS 平台
+        console.log('[停止烘焙] Unix 平台，使用 SIGKILL 信号...');
+        bakingProcess.kill('SIGKILL');
+        bakingProcess = null;
+        console.log('[停止烘焙] ✓ 烘焙进程已停止');
+        return { success: true };
+      }
+    } else {
+      console.warn('[停止烘焙] ⚠ 没有正在运行的烘焙进程');
+      return { success: false, error: '没有正在运行的烘焙进程' };
+    }
+  } catch (error) {
+    console.error('[停止烘焙] ✗ 发生异常:', error);
+    console.error('[停止烘焙] 错误堆栈:', error.stack);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('stop-conversion', async () => {
+  try {
+    if (conversionProcess) {
+      const pid = conversionProcess.pid;
+      console.log('正在停止转换进程，PID:', pid);
+      
+      // Windows 上使用 taskkill 强制终止进程树
+      if (process.platform === 'win32') {
+        const { spawn } = require('child_process');
+        spawn('taskkill', ['/pid', pid.toString(), '/f', '/t']);
+      } else {
+        conversionProcess.kill('SIGKILL');
+      }
+      
+      conversionCancelled = true; // 标记为用户主动取消
+      conversionProcess = null;
+      console.log('转换进程已停止');
       return { success: true };
     }
-    return { success: false, error: '没有正在运行的烘焙进程' };
+    return { success: false, error: '没有正在运行的转换进程' };
   } catch (error) {
+    console.error('停止转换进程失败:', error);
     return { success: false, error: error.message };
   }
 });
@@ -317,6 +1127,318 @@ ipcMain.handle('stop-installation', async () => {
     const stopped = await envManager.stopInstallation();
     return { success: stopped, message: stopped ? '已停止安装并清理缓存' : '没有正在运行的安装' };
   } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+// 获取最新渲染图像
+ipcMain.handle('get-latest-rendered-image', async (event, modelPath) => {
+  try {
+    // 检查路径是否存在
+    const dirExists = await fs.access(modelPath).then(() => true).catch(() => false);
+    if (!dirExists) {
+      return { success: false, error: '输出目录不存在' };
+    }
+    
+    // 查找 point 文件夹中的渲染图像
+    const pointPath = path.join(modelPath, 'point');
+    const pointDirExists = await fs.access(pointPath).then(() => true).catch(() => false);
+    
+    if (pointDirExists) {
+      const files = await fs.readdir(pointPath);
+      const pngFiles = files.filter(f => f.endsWith('.png') && !f.includes('depth'));
+      
+      if (pngFiles.length > 0) {
+        // 按修改时间排序，获取最新的图像
+        const filesWithStats = await Promise.all(
+          pngFiles.map(async (file) => {
+            const filePath = path.join(pointPath, file);
+            const stats = await fs.stat(filePath);
+            return { file, filePath, mtime: stats.mtime };
+          })
+        );
+        
+        filesWithStats.sort((a, b) => b.mtime - a.mtime);
+        const latestFile = filesWithStats[0].filePath;
+        
+        console.log('[图片加载] 找到最新渲染图:', latestFile);
+        
+        // 读取文件并转换为 Base64
+        try {
+          const imageData = await fs.readFile(latestFile);
+          const base64Image = imageData.toString('base64');
+          const dataUrl = `data:image/png;base64,${base64Image}`;
+          
+          console.log('[图片加载] 图片已转换为 Base64，大小:', (imageData.length / 1024).toFixed(2), 'KB');
+          
+          return { 
+            success: true, 
+            imageBase64: dataUrl,
+            imagePath: latestFile
+          };
+        } catch (readError) {
+          console.error('[图片加载] 读取文件失败:', readError);
+          return { success: false, error: `读取图片失败：${readError.message}` };
+        }
+      }
+    }
+    
+    return { success: false, error: '未找到渲染图像' };
+  } catch (error) {
+    console.error('获取最新渲染图像失败:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// 更新项目配置（实时自动保存）
+ipcMain.handle('update-project-config', async (event, configData) => {
+  try {
+    const { projectId, config } = configData;
+    
+    // 验证必填字段
+    if (!projectId) {
+      return { success: false, error: '缺少 projectId' };
+    }
+    
+    // 调用 ProjectManager 更新配置
+    const result = await projectManager.updateProjectConfig(projectId, config);
+    
+    if (result.success) {
+      console.log(`[IPC] 项目配置已更新：${projectId}`);
+      // 通知所有窗口配置已更新
+      mainWindow?.webContents.send('project-config-updated', {
+        projectId,
+        config
+      });
+    }
+    
+    return result;
+  } catch (error) {
+    console.error('[IPC] 更新项目配置失败:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// 更新项目阶段
+ipcMain.handle('update-project-stage', async (event, data) => {
+ try {
+  const { projectId, stage } = data;
+  
+  if (!projectId) {
+   return { success: false, error: '缺少 projectId' };
+  }
+  
+  const result = await projectManager.updateProjectStage(projectId, stage);
+  
+  if (result.success) {
+ console.log(`[IPC] 项目阶段已更新：${projectId} -> ${stage}`);
+  }
+  
+  return result;
+ } catch (error) {
+  console.error('[IPC] 更新项目阶段失败:', error);
+  return { success: false, error: error.message };
+ }
+});
+
+// 检查训练是否完成（检测 chkpnt40000.pth）
+ipcMain.handle('check-training-completion', async (event, projectId) => {
+ try {
+  if (!projectId) {
+   return { success: false, error: '缺少 projectId' };
+  }
+  
+  const result = await projectManager.checkTrainingCompletion(projectId);
+  
+  if (result.success && result.completed) {
+   console.log(`[IPC] ✓ 检测到训练完成：${projectId}`);
+   // 通知前端项目已完成
+   mainWindow.webContents.send('training-completed', { projectId });
+  }
+  
+  return result;
+ } catch (error) {
+  console.error('[IPC] 检查训练完成状态失败:', error);
+  return { success: false, error: error.message };
+ }
+});
+
+// 删除输出目录内容（保留目录本身）
+ipcMain.handle('delete-output-directory', async (event, outputPath) => {
+  try {
+    const fs = require('fs').promises;
+    const path = require('path');
+    
+    console.log(`[删除输出] 准备清空目录内容：${outputPath}`);
+    
+    if (!outputPath) {
+      return { success: false, error: '输出路径为空' };
+    }
+    
+    // 检查目录是否存在
+    try {
+      await fs.access(outputPath);
+    } catch (err) {
+      console.log(`[删除输出] 目录不存在：${outputPath}`);
+      return { success: true, message: '目录不存在，无需删除' };
+    }
+    
+    // 读取目录内容
+    console.log(`[删除输出] 开始读取目录内容：${outputPath}`);
+    const entries = await fs.readdir(outputPath, { withFileTypes: true });
+    
+    // 删除所有文件和子目录
+    for (const entry of entries) {
+      const fullPath = path.join(outputPath, entry.name);
+      console.log(`[删除输出] 删除项：${fullPath}`);
+      
+      if (entry.isDirectory()) {
+        // 递归删除子目录
+        await fs.rm(fullPath, { recursive: true, force: true });
+      } else {
+        // 删除文件
+        await fs.unlink(fullPath);
+      }
+    }
+    
+    console.log(`[删除输出] ✓ 成功清空目录内容：${outputPath}（保留目录本身）`);
+    
+    return { success: true, message: '目录内容已清空' };
+  } catch (error) {
+    console.error('[删除输出] 删除失败:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// 删除项目及其输出（仅清空目录内容，保留目录本身）
+ipcMain.handle('delete-project-and-output', async (event, data) => {
+  try {
+    const { projectId, outputPath } = data;
+    
+    console.log(`[删除项目] 准备删除项目：${projectId}, 输出目录：${outputPath}`);
+    
+    if (!projectId) {
+      return { success: false, error: '缺少 projectId' };
+    }
+    
+    // 1. 先清空输出目录内容（保留目录本身）
+    if (outputPath) {
+      try {
+        const fs = require('fs').promises;
+        const path = require('path');
+        
+        // 检查目录是否存在
+        try {
+          await fs.access(outputPath);
+          
+          // 读取并删除目录内容
+          const entries = await fs.readdir(outputPath, { withFileTypes: true });
+          for (const entry of entries) {
+            const fullPath = path.join(outputPath, entry.name);
+            if (entry.isDirectory()) {
+              await fs.rm(fullPath, { recursive: true, force: true });
+            } else {
+              await fs.unlink(fullPath);
+            }
+          }
+          console.log(`[删除项目] ✓ 输出目录内容已清空：${outputPath}（保留目录本身）`);
+        } catch (err) {
+          if (err.code !== 'ENOENT') {
+            console.warn(`[删除项目] 清空输出目录失败：${err.message}`);
+          } else {
+            console.log(`[删除项目] 输出目录不存在，跳过：${outputPath}`);
+          }
+        }
+      } catch (err) {
+        console.warn(`[删除项目] 处理输出目录异常：${err.message}`);
+      }
+    }
+    
+    // 2. 删除项目配置
+    if (projectId) {
+      const result = await projectManager.deleteProject(projectId);
+      if (result.success) {
+        console.log(`[删除项目] ✓ 项目配置已删除：${projectId}`);
+      } else {
+        console.warn(`[删除项目] 删除项目配置失败：${result.error}`);
+      }
+    }
+    
+    return { success: true, message: '项目及其输出已删除' };
+  } catch (error) {
+    console.error('[删除项目] 删除失败:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// 保存训练完成的项目到项目列表
+ipcMain.handle('save-to-projects-list', async (event, data) => {
+  try {
+    const { projectId, thumbnailBase64 } = data;
+    
+    console.log(`[保存项目] 准备保存项目到列表：${projectId}`);
+    
+    if (!projectId) {
+      return { success: false, error: '缺少 projectId' };
+    }
+    
+    // 1. 加载项目配置
+    const projectResult = await projectManager.loadProject(projectId);
+    if (!projectResult.success) {
+      return { success: false, error: projectResult.error };
+    }
+    
+    const projectConfig = projectResult.data;
+    console.log(`[保存项目] 项目配置：`, projectConfig);
+    
+    // 2. 保存缩略图（如果有）
+    let thumbnailPath = null;
+    if (thumbnailBase64) {
+      try {
+        const fs = require('fs');
+        const path = require('path');
+        
+        // 在项目输出目录的 .luminags 中保存缩略图
+        const luminagsDir = path.join(projectConfig.outputPath, '.luminags');
+        await fs.promises.mkdir(luminagsDir, { recursive: true });
+        
+        // 生成缩略图文件名
+        const thumbnailFileName = `thumbnail_${Date.now()}.png`;
+        thumbnailPath = path.join(luminagsDir, thumbnailFileName);
+        
+        // 解码并保存 Base64 图片
+        const base64Data = thumbnailBase64.replace(/^data:image\/png;base64,/, '');
+        await fs.promises.writeFile(thumbnailPath, base64Data, 'base64');
+        
+        console.log(`[保存项目] ✓ 缩略图已保存：${thumbnailPath}`);
+      } catch (thumbError) {
+        console.error('[保存项目] 保存缩略图失败:', thumbError);
+        // 不阻断后续流程
+      }
+    }
+    
+    // 3. 更新项目状态为已完成
+    await projectManager.updateProject(projectId, {
+      status: 'completed'
+    });
+    
+    // 4. 更新项目索引，添加缩略图路径
+    const projectIndex = projectManager.projects.find(p => p.projectId === projectId);
+    if (projectIndex) {
+      projectIndex.thumbnailPath = thumbnailPath;
+      await projectManager.saveProjects();
+    }
+    
+    console.log(`[保存项目] ✓ 项目已成功保存到列表：${projectId}`);
+    
+    return { 
+      success: true, 
+      message: '项目已保存到列表',
+      projectId,
+      thumbnailPath
+    };
+  } catch (error) {
+    console.error('[保存项目] 保存失败:', error);
     return { success: false, error: error.message };
   }
 });
@@ -803,6 +1925,70 @@ ipcMain.handle('get-gpu-usage', async () => {
 });
 
 app.whenReady().then(async () => {
+  // 注册 luma:// 协议处理器
+  protocol.handle('luma', async (request) => {
+    try {
+      const path = require('path');
+      const fs = require('fs');
+      
+      // 从 URL 中提取文件路径
+      // luma://E:/path/to/file.png -> E:/path/to/file.png
+      const urlPath = request.url.slice('luma://'.length);
+      
+      console.log('[Luma Protocol] 原始 URL:', request.url);
+      console.log('[Luma Protocol] 提取路径:', urlPath);
+      
+      // ✅ 关键修复：不要解码，直接使用原始路径
+      // 因为路径已经是正斜杠格式，不需要 decodeURIComponent
+      const filePath = urlPath;
+      
+      console.log('[Luma Protocol] 最终路径:', filePath);
+      
+      // 检查文件是否存在
+      if (!fs.existsSync(filePath)) {
+        console.error('[Luma Protocol] ❌ 文件不存在:', filePath);
+        // 尝试一些可能的变体
+        const alternatives = [
+          filePath.replace(/^e\//i, 'E:/'),
+          filePath.replace(/^E\//i, 'E:/'),
+          filePath.replace(/^e:/i, 'E:'),
+        ];
+        
+        for (const alt of alternatives) {
+          if (fs.existsSync(alt)) {
+            console.log('[Luma Protocol] ✓ 找到替代路径:', alt);
+            const fileContent = await fs.promises.readFile(alt);
+            const ext = path.extname(alt).toLowerCase();
+            const mimeType = getImageMimeType(ext);
+            return new Response(fileContent, {
+              headers: { 'Content-Type': mimeType }
+            });
+          }
+        }
+        
+        return new Response('File not found: ' + filePath, { status: 404 });
+      }
+      
+      // 读取文件内容
+      const fileContent = await fs.promises.readFile(filePath);
+      
+      // 根据文件扩展名确定 MIME 类型
+      const ext = path.extname(filePath).toLowerCase();
+      const mimeType = getImageMimeType(ext);
+      
+      console.log(`[Luma Protocol] ✓ 返回文件：${filePath} (${mimeType})`);
+      
+      return new Response(fileContent, {
+        headers: {
+          'Content-Type': mimeType
+        }
+      });
+    } catch (error) {
+      console.error('[Luma Protocol] ❌ 错误:', error);
+      return new Response('Internal Server Error', { status: 500 });
+    }
+  });
+  
   // 先创建窗口，正常显示主页
   createWindow();
   
@@ -1063,37 +2249,87 @@ ipcMain.handle('convert-dataset', async (event, config) => {
       return { success: false, error: '数据集路径不存在' };
     }
     
-    // 构建 convert.py 命令
-    const convertScriptPath = path.join(__dirname, '../../tools/gaussian-splatting/convert.py');
-    const args = ['-s', sourcePath];
+    // 检查是否有 input 子目录，如果没有，创建它并将所有图片移动到 input
+    const inputPath = path.join(sourcePath, 'input');
+    const inputExists = await fs.access(inputPath).then(() => true).catch(() => false);
     
-    if (resize) {
-      args.push('--resize');
+    if (!inputExists) {
+      // 创建 input 目录
+      await fs.mkdir(inputPath, { recursive: true });
+      console.log('创建 input 目录:', inputPath);
+      
+      // 获取所有图片文件
+      const files = await fs.readdir(sourcePath);
+      const imageExtensions = ['.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif'];
+      const imageFiles = files.filter(f => 
+        imageExtensions.includes(path.extname(f).toLowerCase())
+      );
+      
+      console.log(`找到 ${imageFiles.length} 个图片文件，移动到 input 目录`);
+      
+      // 移动图片到 input 目录
+      for (const file of imageFiles) {
+        const srcFile = path.join(sourcePath, file);
+        const destFile = path.join(inputPath, file);
+        try {
+          await fs.rename(srcFile, destFile);
+          console.log(`移动：${file} -> input/${file}`);
+        } catch (err) {
+          console.error(`移动文件失败 ${file}:`, err);
+        }
+      }
     }
     
-    console.log('运行转换脚本:', convertScriptPath, args.join(' '));
+    // 直接使用 Python 执行 convert.py 脚本
+    const convertScriptPath = path.join(__dirname, '../../tools/gaussian-splatting/convert.py');
     
-    // 启动转换进程
-    conversionProcess = spawn(envManager.pythonPath || 'python', [convertScriptPath, ...args], {
-      cwd: path.join(__dirname, '../../tools/gaussian-splatting')
+    // 检查脚本文件是否存在
+    const scriptExists = await fs.access(convertScriptPath).then(() => true).catch(() => false);
+    if (!scriptExists) {
+      return { success: false, error: '找不到转换脚本：' + convertScriptPath };
+    }
+    
+    // 构建命令参数
+    const scriptArgs = ['-s', sourcePath];
+    if (resize) {
+      scriptArgs.push('--resize');
+    }
+    
+    console.log('运行转换脚本:', envManager.pythonPath, convertScriptPath, scriptArgs.join(' '));
+    
+    // 启动转换进程 - 使用 Python 环境管理器执行
+    conversionProcess = envManager.runPythonScript(convertScriptPath, scriptArgs, {
+      cwd: path.join(__dirname, '../../tools/gaussian-splatting'),
+      env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
     });
     
     conversionProcess.stdout.on('data', (data) => {
       const output = data.toString();
-      console.log('转换输出:', output);
-      mainWindow.webContents.send('training-output', { type: 'stdout', data: output });
+      console.log('[CONVERT]', output);
+      mainWindow.webContents.send('conversion-output', { type: 'stdout', data: output });
     });
     
     conversionProcess.stderr.on('data', (data) => {
       const output = data.toString();
-      console.error('转换错误:', output);
-      mainWindow.webContents.send('training-output', { type: 'stderr', data: output });
+      console.error('[CONVERT ERROR]', output);
+      mainWindow.webContents.send('conversion-output', { type: 'stderr', data: output });
     });
     
     const exitCode = await new Promise((resolve) => {
       conversionProcess.on('close', resolve);
     });
     
+    console.log('[CONVERT] 进程退出，代码:', exitCode);
+    
+    // 检查是否是用户主动取消
+    if (conversionCancelled) {
+      conversionCancelled = false; // 重置标志
+      mainWindow.webContents.send('conversion-close', { code: -1 }); // 发送特殊代码表示取消
+      conversionProcess = null;
+      return { success: true, cancelled: true }; // 返回成功但标记为取消
+    }
+    
+    mainWindow.webContents.send('conversion-close', { code: exitCode });
     conversionProcess = null;
     
     if (exitCode === 0) {
@@ -1115,3 +2351,83 @@ app.on(
     callback(true);
   }
 );
+
+// ==================== 项目管理相关 IPC ====================
+
+// 获取操作系统平台
+ipcMain.handle('get-platform', async () => {
+  return process.platform;
+});
+
+// 将本地文件路径转换为 luma:// URL
+ipcMain.handle('convert-file-path', async (event, filePath) => {
+  try {
+    const path = require('path');
+    
+    // 规范化路径（替换反斜杠为正斜杠）
+    let normalizedPath = filePath.replace(/\\/g, '/');
+    
+    // ✅ 关键修复：确保 Windows 盘符路径正确
+    // Windows: E:\path -> E:/path -> luma://E:/path
+    // 检查是否是 Windows 绝对路径（包含盘符）
+    if (/^[A-Za-z]:/.test(filePath)) {
+      // 已经是标准格式，不需要额外处理
+      console.log(`[ConvertPath] 检测到 Windows 绝对路径：${filePath}`);
+    }
+    
+    // 转换为 luma:// URL
+    const lumaUrl = `luma://${normalizedPath}`;
+    
+    console.log(`[ConvertPath] ${filePath} -> ${lumaUrl}`);
+    
+    return { success: true, url: lumaUrl };
+  } catch (error) {
+    console.error('[ConvertPath] 转换失败:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// 获取所有项目列表
+ipcMain.handle('get-project-list', async () => {
+  try {
+    const projects = projectManager.getAllProjects();
+    // 扫描并更新项目状态
+    await projectManager.scanProjects();
+    return { success: true, data: projects };
+  } catch (error) {
+    console.error('[IPC] 获取项目列表失败:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// 获取单个项目详情
+ipcMain.handle('get-project-detail', async (event, projectId) => {
+  try {
+    const result = await projectManager.loadProject(projectId);
+    return result;
+  } catch (error) {
+    console.error('[IPC] 获取项目详情失败:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// 获取队列状态
+ipcMain.handle('get-queue-status', async () => {
+  try {
+    return {
+      success: true,
+      data: {
+        isTrainingActive,
+        queueLength: trainingQueue.length,
+        currentProjectId: currentTrainingProjectId,
+        queuedProjects: trainingQueue.map(task => ({
+          projectId: task.projectId,
+          projectName: task.projectName
+        }))
+      }
+    };
+  } catch (error) {
+    console.error('[IPC] 获取队列状态失败:', error);
+    return { success: false, error: error.message };
+  }
+});
