@@ -147,15 +147,14 @@ export default {
         temperature: 0
       },
       // 显卡选择相关数据
-      showGpuList: false, // 控制下拉列表显示
-      availableGpus: [], // 可用的GPU列表
-      selectedGpuIndex: -1, // 当前选择的GPU索引，-1表示未选择
-      selectedGpuIdentifier: '', // 选中GPU的唯一标识符
-      // 图表数据存储
+      showGpuList: false,
+      availableGpus: [],
+      selectedGpuIndex: -1,
+      selectedGpuIdentifier: '',
       chartTimeData: [],
       utilizationData: [],
       memoryData: [],
-      maxDataPoints: 10, // 最多显示 10 个数据点
+      maxDataPoints: 10,
           
       // 项目队列数据
       projectQueue: [], // 所有项目的列表
@@ -524,7 +523,6 @@ export default {
               }
             }
           }
-          // 移除右侧Y轴配置
         ],
         series: [
           {
@@ -555,7 +553,7 @@ export default {
           {
             name: '显存使用率',
             type: 'line',
-            yAxisIndex: 0,  // 改为使用左侧Y轴
+            yAxisIndex: 0,
             smooth: true,
             data: this.memoryData,
             itemStyle: {
@@ -581,11 +579,8 @@ export default {
       };
 
       this.gpuChart.setOption(option);
-
-      // 监听窗口大小变化
       window.addEventListener('resize', this.handleResize);
       
-      // 确保图表正确渲染
       this.$nextTick(() => {
         if (this.gpuChart) {
           this.gpuChart.resize();
@@ -672,8 +667,6 @@ export default {
     async fetchGpuData() {
       try {
         this.refreshStatus = '刷新中...';
-        
-        // 检查Electron API是否可用
         if (!window.electronAPI || !window.electronAPI.getGpuUsage) {
           throw new Error('Electron API不可用，请确保在Electron环境中运行');
         }
@@ -719,13 +712,13 @@ export default {
         // 为不同类型的GPU提供不同的日志信息
         const currentGpuName = this.gpuModel.toLowerCase();
         if (currentGpuName.includes('intel')) {
-          console.log(`✓ Intel集成显卡数据获取成功: ${validatedData.utilization}% (基于CPU负载推算)`);
+          console.log(`Intel集成显卡数据获取成功: ${validatedData.utilization}% (基于CPU负载推算)`);
         } else if (currentGpuName.includes('amd')) {
-          console.log(`✓ AMD集成显卡数据获取成功: ${validatedData.utilization}% (基于系统负载推算)`);
+          console.log(`AMD集成显卡数据获取成功: ${validatedData.utilization}% (基于系统负载推算)`);
         } else if (currentGpuName.includes('nvidia')) {
-          console.log(`✓ NVIDIA独立显卡数据获取成功: ${validatedData.utilization}% (直接硬件读取)`);
+          console.log(`NVIDIA独立显卡数据获取成功: ${validatedData.utilization}% (直接硬件读取)`);
         } else {
-          console.log(`✓ GPU数据获取成功: ${validatedData.utilization}%`);
+          console.log(`GPU数据获取成功: ${validatedData.utilization}%`);
         }
         
       } catch (error) {
@@ -754,7 +747,7 @@ export default {
                 console.warn(`当前选中索引: ${this.selectedGpuIndex}`);
                 // 不自动更改用户选择，但记录不一致情况
               } else {
-                console.log(`✓ GPU一致性验证通过: ${currentGpuInfo}`);
+                console.log(`GPU一致性验证通过: ${currentGpuInfo}`);
               }
             }
           } else {
@@ -1013,7 +1006,6 @@ export default {
         const result = await window.electronAPI?.getLatestRenderedImage(modelPath);
         
         if (result && result.success && result.imageBase64) {
-          // 直接使用 Base64 数据，不添加时间戳参数（避免解析失败）
           const imageUrl = result.imageBase64;
           
           console.log('[渲染图] 找到最新渲染图:', result.imagePath);
@@ -1032,7 +1024,6 @@ export default {
           };
           img.src = imageUrl;
         } else {
-          // 没有找到渲染图（可能是训练初期）
           console.log('[渲染图] 未找到渲染图像（可能是训练初期）');
           if (result?.error) {
             console.log('[渲染图] 错误信息:', result.error);
@@ -1094,7 +1085,7 @@ export default {
   display: flex;
   flex-direction: column;
   height: 100%;
-  min-height: 32rem; /* 确保最小高度 */
+  min-height: 32rem;
 }
 
 .card-header {
@@ -1102,7 +1093,7 @@ export default {
   justify-content: space-between;
   align-items: flex-start;
   margin-bottom: 1rem;
-  flex-shrink: 0; /* 防止头部被压缩 */
+  flex-shrink: 0;
 }
 
 .gpu-stats {
@@ -1538,7 +1529,7 @@ export default {
     padding: 1rem;
   }
 }
-</style>
+
 
 .error-display {
   display: flex;
@@ -1775,3 +1766,4 @@ export default {
   background-color: #f1f5f9;
   color: #8b5cf6;
 }
+</style>

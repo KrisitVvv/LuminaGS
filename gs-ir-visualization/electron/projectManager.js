@@ -650,7 +650,10 @@ console.error('[ProjectManager] 更新项目阶段失败:', error);
       } = configUpdates;
            
       // 更新顶层字段
-     if (projectName !== undefined) projectConfig.name = projectName;
+     if (projectName !== undefined) {
+        projectConfig.name = projectName;
+        projectIndex.name = projectName;  // ✅ 同步更新全局索引
+      }
      if (outputPath !== undefined) projectConfig.outputPath = outputPath;
      if (sourcePath !== undefined) projectConfig.sourcePath = sourcePath;
      if (checkpoint !== undefined) projectConfig.checkpoint = checkpoint;

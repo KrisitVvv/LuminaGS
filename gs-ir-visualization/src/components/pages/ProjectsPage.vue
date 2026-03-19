@@ -1,7 +1,6 @@
 <template>
   <section class="projects-container">
     <div class="projects-content">
-      <!-- 头部区域 -->
       <div class="header-section">
         <h2 class="page-title">所有项目 ({{ completedCount }})</h2>
         <div class="header-actions">
@@ -14,14 +13,11 @@
           <button class="new-project-btn" @click="createNewProject">新建项目</button>
         </div>
       </div>
-      
-      <!-- 加载状态 -->
       <div v-if="loading" class="loading-state">
         <span class="iconify" data-icon="solar:spinner-4"></span>
         正在加载项目...
       </div>
       
-      <!-- 空状态 -->
       <div v-else-if="projects.length === 0" class="empty-state">
         <span class="iconify" data-icon="solar:folder-open-linear"></span>
         <p>暂无项目</p>
@@ -45,7 +41,6 @@
             <h3 class="project-name">{{ project.name }}</h3>
             <p class="project-meta">{{ formatLastModified(project.lastModified) }}</p>
             <div class="card-footer">
-              <!-- ✅ 使用更大的点击区域 -->
               <div 
                 class="menu-icon-wrapper"
                 @mousedown.stop.prevent="showContextMenu($event, project)"
@@ -59,25 +54,94 @@
             </div>
           </div>
         </div>
-        
-        <!-- ✅ 新增：上下文菜单 -->
-        <div 
-          v-if="contextMenuVisible" 
-          class="context-menu-overlay"
-          @click="hideContextMenu"
-        >
+        <div v-if="contextMenuVisible" class="context-menu-overlay" @click="hideContextMenu">
           <div 
             class="context-menu"
             :style="{ top: contextMenuPosition.top + 'px', left: contextMenuPosition.left + 'px' }"
             @click.stop
           >
-            <div class="context-menu-item" @click.stop="renameProject(currentSelectedProject)">
+            <button class="context-menu-btn" type="button" @click.stop="showRenameDialog(currentSelectedProject)">
               <span class="iconify" data-icon="solar:pen-bold"></span>
               <span>重命名项目</span>
-            </div>
-            <div class="context-menu-item danger" @click.stop="deleteProject(currentSelectedProject)">
+            </button>
+            <button class="context-menu-btn danger" type="button" @click.stop="deleteProject(currentSelectedProject)">
               <span class="iconify" data-icon="solar:trash-bin-trash-bold"></span>
               <span>删除项目</span>
+            </button>
+          </div>
+        </div>
+        
+        <div v-if="renameDialogVisible" class="rename-dialog-overlay" @click="closeRenameDialog">
+          <div class="rename-dialog" @click.stop>
+            <div class="dialog-header">
+              <h3 class="dialog-title">重命名项目</h3>
+            </div>
+            <div class="dialog-content">
+              <label class="dialog-label">项目名称</label>
+              <input 
+                ref="renameInput"
+                class="dialog-input" 
+                type="text" 
+                v-model="newProjectName"
+                placeholder="请输入项目名称"
+                @keyup.enter="confirmRename"
+                @keyup.esc="closeRenameDialog"
+              >
+              <p v-if="errorMessage" class="error-message">{{ errorMessage }}</p>
+            </div>
+            <div class="dialog-footer">
+              <button class="btn-cancel" @click="closeRenameDialog">取消</button>
+              <button class="btn-confirm" @click="confirmRename" :disabled="isConfirming">确认</button>
+            </div>
+          </div>
+        </div>
+        
+        <!-- ✅ 新增：删除确认弹窗 -->
+        <div v-if="deleteDialogVisible" class="delete-dialog-overlay" @click="closeDeleteDialog">
+          <div class="delete-dialog" @click.stop>
+            <div class="dialog-header danger-header">
+              <h3 class="dialog-title danger-title">删除项目</h3>
+            </div>
+            <div class="dialog-content">
+              <div class="delete-warning">
+                <span class="iconify warning-icon" data-icon="solar:danger-triangle-bold"></span>
+                <div class="warning-text">
+                  <p class="warning-title">此操作将永久删除以下内容：</p>
+                  <ul class="warning-list">
+                    <li>项目的所有输出文件</li>
+                    <li>训练生成的检查点和模型</li>
+                    <li>渲染结果和日志文件</li>
+                  </ul>
+                </div>
+              </div>
+              <div class="project-info">
+                <p class="info-label">项目名称：</p>
+                <p class="info-value">{{ currentSelectedProject?.name || '' }}</p>
+              </div>
+              <div class="project-info">
+                <p class="info-label">项目路径：</p>
+                <p class="info-value path-value">{{ currentSelectedProject?.outputPath || '' }}</p>
+              </div>
+              <div class="confirm-input-wrapper">
+                <label class="dialog-label">请输入 "DELETE" 以确认删除：</label>
+                <input 
+                  ref="deleteInput"
+                  class="dialog-input delete-input" 
+                  type="text" 
+                  v-model="deleteConfirmText"
+                  placeholder="输入 DELETE 确认删除"
+                  @keyup.enter="confirmDelete"
+                  @keyup.esc="closeDeleteDialog"
+                >
+                <p v-if="deleteErrorMessage" class="error-message">{{ deleteErrorMessage }}</p>
+              </div>
+            </div>
+            <div class="dialog-footer">
+              <button class="btn-cancel" @click="closeDeleteDialog">取消</button>
+              <button class="btn-delete" @click="confirmDelete" :disabled="!canDelete || isDeleting">
+                <span class="iconify" data-icon="solar:trash-bin-trash-bold"></span>
+                <span>{{ isDeleting ? '正在删除...' : '删除项目' }}</span>
+              </button>
             </div>
           </div>
         </div>
@@ -94,27 +158,34 @@ export default {
       searchQuery: '',
       projects: [],
       loading: false,
-      platform: 'win32', // 默认值，会在 created 中获取真实值
-      // ✅ 新增：上下文菜单相关数据
+      platform: 'win32',
       contextMenuVisible: false,
       contextMenuPosition: { top: 0, left: 0 },
-      currentSelectedProject: null
+      currentSelectedProject: null,
+      // ✅ 新增：重命名弹窗相关数据
+      renameDialogVisible: false,
+      newProjectName: '',
+      errorMessage: '',
+      isConfirming: false,
+      // ✅ 新增：删除弹窗相关数据
+      deleteDialogVisible: false,
+      deleteConfirmText: '',
+      deleteErrorMessage: '',
+      isDeleting: false
     }
   },
   async created() {
-    // 获取操作系统平台
     try {
       this.platform = await window.electronAPI?.getPlatform() || 'win32';
       console.log('[ProjectsPage] 操作系统平台:', this.platform);
     } catch (error) {
       console.error('[ProjectsPage] 获取平台失败:', error);
     }
-    
     this.loadProjects();
   },
   computed: {
     completedCount() {
-      // ✅ 只统计已完成的项目数量
+      //只统计已完成的项目数量
       return this.projects.filter(project => 
         project.status === 'completed'
       ).length;
@@ -122,7 +193,7 @@ export default {
     
     filteredProjects() {
       if (!this.searchQuery) {
-        // ✅ 只显示已完成的项目
+        // 只显示已完成的项目
         return this.projects.filter(project => 
           project.status === 'completed'
         );
@@ -132,6 +203,11 @@ export default {
         project.status === 'completed' &&
         project.name.toLowerCase().includes(this.searchQuery.toLowerCase())
       );
+    },
+    
+    // ✅ 新增：删除按钮是否可用
+    canDelete() {
+      return this.deleteConfirmText === 'DELETE';
     }
   },
   methods: {
@@ -145,8 +221,6 @@ export default {
         if (result?.success && result.data) {
           this.projects = result.data;
           console.log(`[ProjectsPage] ✓ 加载了 ${this.projects.length} 个项目`);
-          
-          // ✅ 新增：详细打印每个项目的缩略图信息
           this.projects.forEach((project, index) => {
             console.log(`[ProjectsPage] 项目 ${index + 1}:`, {
               projectId: project.projectId,
@@ -157,7 +231,7 @@ export default {
             });
           });
           
-          // ✅ 新增：异步加载所有项目的图片 URL
+          //异步加载项目图片URL
           await this.loadAllProjectImages();
         } else {
           console.error('[ProjectsPage] 加载失败:', result?.error);
@@ -171,7 +245,7 @@ export default {
       }
     },
     
-    // ✅ 新增：批量加载所有项目的图片 URL
+    // 批量加载所有项目的图片 URL
     async loadAllProjectImages() {
       console.log('[ProjectsPage] 开始加载所有项目图片...');
       
@@ -185,14 +259,14 @@ export default {
           if (imageUrl) {
             project.imageUrl = imageUrl;
             project.imageLoaded = true;
-            console.log(`[ProjectsPage] ✓ 项目 ${i + 1} 图片加载成功：${imageUrl}`);
+            console.log(`[ProjectsPage] 项目 ${i + 1} 图片加载成功：${imageUrl}`);
           } else {
             project.imageLoaded = false;
-            console.log(`[ProjectsPage] ⚠️ 项目 ${i + 1} 无可用图片`);
+            console.log(`[ProjectsPage] 项目 ${i + 1} 无可用图片`);
           }
         } catch (error) {
           project.imageLoaded = false;
-          console.error(`[ProjectsPage] ❌ 项目 ${i + 1} 图片加载失败:`, error);
+          console.error(`[ProjectsPage] 项目 ${i + 1} 图片加载失败:`, error);
         }
       }
       
@@ -356,66 +430,150 @@ export default {
       this.currentSelectedProject = null;
     },
     
-    // ✅ 新增：重命名项目
-    async renameProject(project) {
+    // ✅ 新增：显示重命名弹窗
+    showRenameDialog(project) {
       if (!project) return;
       
       this.hideContextMenu();
+      this.currentSelectedProject = project;
+      this.newProjectName = project.name;
+      this.errorMessage = '';
+      this.isConfirming = false;
+      this.renameDialogVisible = true;
       
-      console.log('[ProjectsPage] 重命名项目:', project.name);
+      console.log('[ProjectsPage] 打开重命名弹窗:', project.name);
       
-      // 使用原生 prompt 进行重命名
-      const newName = prompt('请输入新的项目名称:', project.name);
+      // 弹窗打开后自动聚焦输入框并选中文本
+      this.$nextTick(() => {
+        if (this.$refs.renameInput) {
+          this.$refs.renameInput.focus();
+          this.$refs.renameInput.select();
+        }
+      });
+    },
+    
+    // ✅ 新增：关闭重命名弹窗
+    closeRenameDialog() {
+      this.renameDialogVisible = false;
+      this.newProjectName = '';
+      this.errorMessage = '';
+      this.isConfirming = false;
+      this.currentSelectedProject = null;
+      console.log('[ProjectsPage] 关闭重命名弹窗');
+    },
+    
+    // ✅ 新增：确认重命名
+    async confirmRename() {
+      if (!this.currentSelectedProject) return;
       
-      if (!newName || newName.trim() === '') {
-        console.log('[ProjectsPage] 取消重命名');
+      const project = this.currentSelectedProject;
+      const trimmedName = this.newProjectName.trim();
+      
+      console.log('[ProjectsPage] 确认重命名:', trimmedName);
+      
+      // 验证名称
+      if (!trimmedName) {
+        this.errorMessage = '项目名称不能为空';
         return;
       }
       
-      if (newName === project.name) {
-        console.log('[ProjectsPage] 名称未改变');
+      // 检查名称是否改变
+      if (trimmedName === project.name) {
+        this.errorMessage = '项目名称未改变';
         return;
       }
+      
+      // 验证非法字符（不允许包含 \ / : * ? " < > |）
+      const invalidCharsPattern = /[\\/:*?"<>|]/;
+      if (invalidCharsPattern.test(trimmedName)) {
+        this.errorMessage = '项目名称不能包含以下字符：\\ / : * ? " < > |';
+        return;
+      }
+      
+      // 开始重命名
+      this.isConfirming = true;
+      this.errorMessage = '';
       
       try {
         // 调用 Electron API 更新项目配置
+        // 这会同时更新 projects.json 和项目配置文件中的 name 字段
         const result = await window.electronAPI?.updateProjectConfig(project.projectId, {
-          name: newName.trim()
+          projectName: trimmedName
         });
         
         if (result?.success) {
-          console.log(`[ProjectsPage] ✓ 重命名成功：${project.name} -> ${newName}`);
+          console.log(`[ProjectsPage] ✓ 重命名成功：${project.name} -> ${trimmedName}`);
           // 更新本地数据
-          project.name = newName.trim();
-          alert(`项目重命名成功！\n新名称：${newName}`);
+          project.name = trimmedName;
+          this.closeRenameDialog();
         } else {
           console.error('[ProjectsPage] ❌ 重命名失败:', result?.error);
-          alert('重命名失败：' + (result?.error || '未知错误'));
+          this.errorMessage = '重命名失败：' + (result?.error || '未知错误');
         }
       } catch (error) {
         console.error('[ProjectsPage] ❌ 重命名异常:', error);
-        alert('重命名失败：' + error.message);
+        this.errorMessage = '重命名失败：' + error.message;
+      } finally {
+        this.isConfirming = false;
       }
     },
     
-    // ✅ 新增：删除项目
-    async deleteProject(project) {
+    async renameProject(project) {
+      this.showRenameDialog(project);
+    },
+    
+    // ✅ 新增：显示删除确认弹窗
+    showDeleteDialog(project) {
       if (!project) return;
       
       this.hideContextMenu();
+      this.currentSelectedProject = project;
+      this.deleteConfirmText = '';
+      this.deleteErrorMessage = '';
+      this.isDeleting = false;
+      this.deleteDialogVisible = true;
       
-      console.log('[ProjectsPage] 删除项目:', project.name);
+      console.log('[ProjectsPage] 打开删除确认弹窗:', project.name);
       
-      // 确认删除
-      const confirmed = confirm(`确定要删除项目 "${project.name}" 吗？\n\n此操作将删除项目的输出目录，但不会删除项目配置文件。`);
+      // 弹窗打开后自动聚焦输入框
+      this.$nextTick(() => {
+        if (this.$refs.deleteInput) {
+          this.$refs.deleteInput.focus();
+        }
+      });
+    },
+    
+    // ✅ 新增：关闭删除确认弹窗
+    closeDeleteDialog() {
+      this.deleteDialogVisible = false;
+      this.deleteConfirmText = '';
+      this.deleteErrorMessage = '';
+      this.isDeleting = false;
+      this.currentSelectedProject = null;
+      console.log('[ProjectsPage] 关闭删除确认弹窗');
+    },
+    
+    // ✅ 新增：确认删除项目（彻底删除所有内容）
+    async confirmDelete() {
+      if (!this.currentSelectedProject) return;
       
-      if (!confirmed) {
-        console.log('[ProjectsPage] 取消删除');
+      const project = this.currentSelectedProject;
+      
+      // 验证是否输入了 DELETE
+      if (this.deleteConfirmText !== 'DELETE') {
+        this.deleteErrorMessage = '请输入 "DELETE" 以确认删除';
         return;
       }
       
+      console.log('[ProjectsPage] 确认删除项目:', project.name);
+      
+      // 开始删除
+      this.isDeleting = true;
+      this.deleteErrorMessage = '';
+      
       try {
-        // 调用 Electron API 删除项目输出
+        // 调用 Electron API 删除项目及其所有输出文件
+        // 这会删除整个 outputPath 目录下的所有内容
         const result = await window.electronAPI?.deleteProjectAndOutput(project.projectId, project.outputPath);
         
         if (result?.success) {
@@ -425,16 +583,23 @@ export default {
           if (index !== -1) {
             this.projects.splice(index, 1);
           }
-          alert(`项目已删除！`);
+          this.closeDeleteDialog();
         } else {
           console.error('[ProjectsPage] ❌ 删除失败:', result?.error);
-          alert('删除失败：' + (result?.error || '未知错误'));
+          this.deleteErrorMessage = '删除失败：' + (result?.error || '未知错误');
         }
       } catch (error) {
         console.error('[ProjectsPage] ❌ 删除异常:', error);
-        alert('删除失败：' + error.message);
+        this.deleteErrorMessage = '删除失败：' + error.message;
+      } finally {
+        this.isDeleting = false;
       }
-    }
+    },
+    
+    // ✅ 修改：删除项目（保留作为兼容，实际使用 showDeleteDialog）
+    async deleteProject(project) {
+      this.showDeleteDialog(project);
+    },
   }
 }
 </script>
@@ -697,7 +862,6 @@ export default {
 .project-meta {
   font-size: 0.75rem;
   color: #94a3b8;
-  margin-bottom: 1rem;
   flex-shrink: 0;
 }
 
@@ -706,7 +870,6 @@ export default {
   align-items: center;
   justify-content: right;
   margin-top: auto;
-
   flex-shrink: 0;
 }
 
@@ -726,7 +889,6 @@ export default {
   padding: 0.25rem;
   border-radius: 0.25rem;
   transition: all 0.2s ease;
-  /* ✅ 确保可以点击 */
   pointer-events: auto;
   user-select: none;
   -webkit-tap-highlight-color: transparent;
@@ -752,7 +914,6 @@ export default {
   /* 透明背景，点击关闭菜单 */
 }
 
-/* ✅ 新增：菜单图标包装器样式 */
 .menu-icon-wrapper {
   display: flex;
   align-items: center;
@@ -806,26 +967,332 @@ export default {
   transition: all 0.15s ease;
   font-size: 0.875rem;
   color: #334155;
+  background: none;
+  border: none;
+  width: 100%;
+  text-align: left;
 }
 
-.context-menu-item:hover {
+.context-menu-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.625rem 0.75rem;
+  border-radius: 0.375rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-size: 0.875rem;
+  color: #334155;
+  background: none;
+  border: none;
+  width: 100%;
+  text-align: left;
+  outline: none;
+}
+
+.context-menu-btn:hover {
   background-color: #f1f5f9;
 }
 
-.context-menu-item .iconify {
+.context-menu-btn .iconify {
   font-size: 1.125rem;
   color: #64748b;
 }
 
-.context-menu-item.danger {
+.context-menu-btn.danger {
   color: #dc2626;
 }
 
-.context-menu-item.danger:hover {
+.context-menu-btn.danger:hover {
   background-color: #fef2f2;
 }
 
-.context-menu-item.danger .iconify {
+.context-menu-btn.danger .iconify {
   color: #dc2626;
+}
+
+/* ✅ 新增：重命名弹窗样式 */
+.rename-dialog-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+  animation: overlayFadeIn 0.2s ease;
+}
+
+@keyframes overlayFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.rename-dialog {
+  background: white;
+  border-radius: 1rem;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(0, 0, 0, 0.05);
+  width: 100%;
+  max-width: 480px;
+  min-height: 200px;
+  animation: dialogSlideIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  overflow: hidden;
+}
+
+@keyframes dialogSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-20px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.5rem 1.5rem 0 1.5rem;
+  margin-bottom: 1rem;
+}
+
+.dialog-title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: #1e293b;
+  margin: 0;
+}
+
+.dialog-content {
+  padding: 0 1.5rem 1.5rem 1.5rem;
+}
+
+.dialog-label {
+  display: block;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: #475569;
+  margin-bottom: 0.5rem;
+}
+
+.dialog-input {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  font-size: 1rem;
+  border: 2px solid #e2e8f0;
+  border-radius: 0.75rem;
+  outline: none;
+  transition: all 0.2s ease;
+  background-color: #ffffff;
+  color: #1e293b;
+  box-sizing: border-box;
+}
+
+.dialog-input:focus {
+  border-color: #a78bfa;
+  box-shadow: 0 0 0 3px rgba(167, 139, 250, 0.1);
+}
+
+.dialog-input::placeholder {
+  color: #94a3b8;
+}
+
+.error-message {
+  margin-top: 0.75rem;
+  padding: 0.75rem 1rem;
+  background-color: #fef2f2;
+  border-left: 3px solid #dc2626;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  color: #dc2626;
+  line-height: 1.5;
+}
+
+.dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  padding: 1rem 1.5rem 1.5rem 1.5rem;
+  background-color: #f8fafc;
+  border-top: 1px solid #e2e8f0;
+}
+
+.btn-cancel,
+.btn-confirm {
+  padding: 0.625rem 1.5rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  border-radius: 0.5rem;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-cancel {
+  background-color: #f1f5f9;
+  color: #475569;
+}
+
+.btn-cancel:hover {
+  background-color: #e2e8f0;
+}
+
+.btn-confirm {
+  background-color: #7e22ce;
+  color: white;
+}
+
+.btn-confirm:hover:not(:disabled) {
+  background-color: #6b21a8;
+}
+
+.btn-confirm:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ✅ 新增：删除弹窗样式 */
+.delete-dialog-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+  animation: overlayFadeIn 0.2s ease;
+}
+
+.delete-dialog {
+  background: white;
+  border-radius: 1rem;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(0, 0, 0, 0.05);
+  width: 100%;
+  max-width: 560px;
+  animation: dialogSlideIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  overflow: hidden;
+}
+
+.danger-header {
+  background-color: #fef2f2;
+  padding-bottom: 1rem;
+}
+
+.danger-title {
+  color: #dc2626;
+}
+
+.delete-warning {
+  display: flex;
+  gap: 1rem;
+  padding: 1rem;
+  background-color: #fff7ed;
+  border-left: 4px solid #f97316;
+  border-radius: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+
+.warning-icon {
+  font-size: 2rem;
+  color: #f97316;
+  flex-shrink: 0;
+}
+
+.warning-text {
+  flex: 1;
+}
+
+.warning-title {
+  font-weight: 600;
+  color: #9a3412;
+  margin: 0 0 0.5rem 0;
+  font-size: 0.9375rem;
+}
+
+.warning-list {
+  margin: 0;
+  padding-left: 1.25rem;
+  color: #9a3412;
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+
+.warning-list li {
+  margin-bottom: 0.25rem;
+}
+
+.project-info {
+  display: flex;
+  margin-bottom: 0.75rem;
+  font-size: 0.875rem;
+}
+
+.info-label {
+  font-weight: 500;
+  color: #64748b;
+  min-width: 80px;
+  margin-right: 0.5rem;
+}
+
+.info-value {
+  color: #334155;
+  flex: 1;
+}
+
+.path-value {
+  word-break: break-all;
+  font-family: 'Courier New', monospace;
+  background-color: #f1f5f9;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.25rem;
+}
+
+.confirm-input-wrapper {
+  margin-top: 1.5rem;
+}
+
+.delete-input {
+  font-weight: 600;
+  letter-spacing: 0.05em;
+}
+
+.btn-delete {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.625rem 1.5rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  border-radius: 0.5rem;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  background-color: #dc2626;
+  color: white;
+}
+
+.btn-delete:hover:not(:disabled) {
+  background-color: #b91c1c;
+}
+
+.btn-delete:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-delete .iconify {
+  font-size: 1rem;
 }
 </style>
