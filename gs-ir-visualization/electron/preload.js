@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   maximizeWindow: () => ipcRenderer.invoke('maximize-window'),
   restoreWindow: () => ipcRenderer.invoke('restore-window'),
   closeWindow: () => ipcRenderer.invoke('close-window'),
+  // ✅ 新增：打开 Editor 专用窗口
+  openEditorWindow: (config) => ipcRenderer.invoke('open-editor-window', config),
   // 添加窗口移动相关 API
   startDragging: () => ipcRenderer.invoke('start-dragging'),
   // GPU 监控相关 API
@@ -86,12 +88,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onTrainingCompleted: (callback) => {
     ipcRenderer.on('training-completed', (event, data) => callback(data));
   },
+  // ✅ 新增：获取项目配置
+  getProjectConfig: (projectId) => ipcRenderer.invoke('get-project-config', projectId),
   // 删除项目输出目录
   deleteOutputDirectory: (outputPath) => ipcRenderer.invoke('delete-output-directory', outputPath),
   // 删除项目及其输出
   deleteProjectAndOutput: (projectId, outputPath) => ipcRenderer.invoke('delete-project-and-output', { projectId, outputPath }),
   // 保存训练完成的项目到项目列表
-  saveToProjectsList: (data) => ipcRenderer.invoke('save-to-projects-list', data)
+  saveToProjectsList: (data) => ipcRenderer.invoke('save-to-projects-list', data),
+  // 启动 Python 服务（带 conda 环境）
+  startPythonService: (config) => ipcRenderer.invoke('start-python-service', config),
+  // 停止 Python 服务
+  stopPythonService: () => ipcRenderer.invoke('stop-python-service')
 });
 
 // 监听窗口状态变化

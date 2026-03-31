@@ -1,4 +1,4 @@
-﻿const { app, BrowserWindow, Menu, ipcMain, dialog, protocol } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, dialog, protocol } = require('electron');
 const si = require('systeminformation');
 const { spawn } = require('child_process');
 const path = require('path');
@@ -8,6 +8,7 @@ const ProjectManager = require('./projectManager');
 
 Menu.setApplicationMenu(null);
 let mainWindow = null;
+let editorWindow = null; // Editor 专用窗口
 const isPackaged = app.isPackaged;
 
 // 注册自定义协议 luma:// 用于访问本地文件
@@ -122,20 +123,137 @@ const createWindow = () => {
   });
 }
 
-ipcMain.handle('minimize-window', async () => {
-  mainWindow.minimize();
+ipcMain.handle('minimize-window', async (event) => {
+  const window = BrowserWindow.fromWebContents(event.sender);
+  if (window) {
+    window.minimize();
+    console.log('[EditorWindow] ✓ 已最小化');
+  }
 });
 
-ipcMain.handle('maximize-window', async () => {
-  mainWindow.maximize();
+ipcMain.handle('maximize-window', async (event) => {
+  const window = BrowserWindow.fromWebContents(event.sender);
+  if (window) {
+    window.maximize();
+    console.log('[EditorWindow] ✓ 已最大化');
+  }
 });
 
-ipcMain.handle('restore-window', async () => {
-  mainWindow.restore();
+ipcMain.handle('restore-window', async (event) => {
+  const window = BrowserWindow.fromWebContents(event.sender);
+  if (window) {
+    window.restore();
+    console.log('[EditorWindow] ✓ 已恢复');
+  }
 });
 
-ipcMain.handle('close-window', async () => {
-  mainWindow.close();
+ipcMain.handle('close-window', async (event) => {
+  const window = BrowserWindow.fromWebContents(event.sender);
+  if (window) {
+    window.close();
+    console.log('[EditorWindow] ✓ 已关闭');
+  }
+});
+
+// ✅ 新增：打开 Editor 窗口
+ipcMain.handle('open-editor-window', async (event, config) => {
+  try {
+    console.log('[IPC] 打开 Editor 窗口，配置:', config);
+    
+    if (editorWindow) {
+      // 如果已存在，聚焦到该窗口
+      editorWindow.focus();
+      return { success: true, existed: true };
+    }
+    
+    // 创建新的 Editor 窗口
+    editorWindow = new BrowserWindow({
+      width: 1920,
+      height: 1080,
+      frame: false, // 无边框
+      movable: true,
+      fullscreen: false,
+      fullscreenable: true,
+      hasShadow: false, // 无阴影
+      transparent: false,
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        preload: __dirname + '/preload.js'
+      },
+      show: false, // 先隐藏，加载完成后再显示
+      backgroundColor: '#1e1e1e' // 深色背景
+    });
+    
+    // 设置窗口标题
+    editorWindow.setTitle('LuminaGS - Editor');
+    
+    // 构建 URL，传递项目参数
+    const url = new URL('http://localhost:5173/');
+    url.pathname = '/editor';
+    
+    if (config?.projectId) {
+      url.pathname += `/${config.projectId}`;
+    }
+    
+    if (config?.outputPath) {
+      url.searchParams.append('outputPath', config.outputPath);
+    }
+    
+    if (config?.checkpoint) {
+      url.searchParams.append('checkpoint', config.checkpoint);
+    }
+    
+    // 加载页面
+    editorWindow.loadURL(url.toString());
+    
+    // 监听窗口关闭事件
+    editorWindow.on('closed', () => {
+      console.log('[EditorWindow] 窗口已关闭');
+      editorWindow = null;
+    });
+    
+    // 监听窗口进入全屏
+    editorWindow.on('enter-full-screen', () => {
+      console.log('[EditorWindow] 进入全屏');
+      editorWindow.webContents.send('window-maximized');
+    });
+    
+    // 监听窗口退出全屏
+    editorWindow.on('leave-full-screen', () => {
+      console.log('[EditorWindow] 退出全屏');
+      editorWindow.webContents.send('window-restored');
+    });
+    
+    // ✅ 新增：监听窗口最大化/恢复（针对无边框窗口的模拟）
+    editorWindow.on('maximize', () => {
+      console.log('[EditorWindow] 最大化');
+      editorWindow.webContents.send('window-maximized');
+    });
+    
+    editorWindow.on('unmaximize', () => {
+      console.log('[EditorWindow] 恢复');
+      editorWindow.webContents.send('window-restored');
+    });
+    
+    // 窗口准备好后显示
+    editorWindow.once('ready-to-show', () => {
+      editorWindow.show();
+      editorWindow.maximize();
+    });
+    
+    // 开发模式下打开 DevTools
+    if (!isPackaged) {
+      editorWindow.webContents.openDevTools();
+    }
+    
+    console.log('[EditorWindow] ✓ Editor 窗口已创建');
+    return { success: true, existed: false };
+    
+  } catch (error) {
+    console.error('[EditorWindow] ❌ 创建窗口失败:', error);
+    return { success: false, error: error.message };
+  }
 });
 
 ipcMain.handle('start-dragging', async (event) => {
@@ -212,14 +330,39 @@ ipcMain.handle('check-file-exists', async (event, filePath) => {
     
     try {
       await fs.access(filePath);
-      console.log(`[FileCheck] 文件存在：${filePath}`);
-      return { success: true, exists: true };
+      console.log(`[FileCheck] ✓ 文件存在：${filePath}`);
+      return { success: true, exists: true, path: filePath };
     } catch (err) {
-      console.log(`[FileCheck] 文件不存在：${filePath}`);
+      console.log(`[FileCheck] ❌ 文件不存在：${filePath}`);
       return { success: true, exists: false };
     }
   } catch (error) {
-    console.error('[FileCheck] 检查失败:', error);
+    console.error('[FileCheck] ❌ 检查失败:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// ✅ 新增：获取项目配置
+ipcMain.handle('get-project-config', async (event, projectId) => {
+  try {
+    console.log('[IPC] 获取项目配置:', projectId);
+    
+    if (!projectId) {
+      return { success: false, error: '项目 ID 为空' };
+    }
+    
+    // 从 projectManager 获取项目配置
+    const config = await projectManager.getProjectConfig(projectId);
+    
+    if (config) {
+      console.log('[IPC] ✓ 项目配置加载成功:', projectId);
+      return { success: true, data: config };
+    } else {
+      console.warn('[IPC] ⚠️ 项目配置不存在:', projectId);
+      return { success: false, error: '项目配置不存在' };
+    }
+  } catch (error) {
+    console.error('[IPC] ❌ 获取项目配置失败:', error);
     return { success: false, error: error.message };
   }
 });
@@ -1439,6 +1582,101 @@ ipcMain.handle('save-to-projects-list', async (event, data) => {
     };
   } catch (error) {
     console.error('[保存项目] 保存失败:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// 启动 Python 服务（带 conda 环境）
+let pythonServiceProcess = null;
+
+ipcMain.handle('start-python-service', async (event, config) => {
+  try {
+    const { script, envName = 'gsir', cwd } = config;
+    
+    console.log(`[Python 服务] 准备启动服务：${script}`);
+    console.log(`[Python 服务] 使用环境：${envName}`);
+    console.log(`[Python 服务] 工作目录：${cwd}`);
+    
+    // 检查是否已有服务在运行
+    if (pythonServiceProcess) {
+      console.log('[Python 服务] 已有服务在运行，先停止旧服务');
+      pythonServiceProcess.kill();
+      pythonServiceProcess = null;
+    }
+    
+    // 构建完整的命令：先激活 conda 环境，再执行 Python 脚本
+    if (process.platform === 'win32') {
+      // Windows: 使用 PowerShell 执行 conda activate && python script.py
+      // 使用 conda 的完整路径来激活环境
+      const condaActivate = envManager.condaPath ? 
+        `& "${envManager.condaPath}" activate ${envName}` : 
+        `conda activate ${envName}`;
+      const fullCommand = `${condaActivate}; & '${envManager.pythonPath}' '${script}'`;
+      console.log('[Python 服务] 执行完整命令:', fullCommand);
+      console.log('[Python 服务] Conda 路径:', envManager.condaPath || '使用系统 PATH');
+      console.log('[Python 服务] Python 路径:', envManager.pythonPath);
+      
+      pythonServiceProcess = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', fullCommand], {
+        cwd: cwd,
+        env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
+      });
+    } else {
+      // Unix/Linux/macOS: 使用 bash -c "source activate gsir && python script.py"
+      const fullCommand = `cd '${cwd}' && source activate ${envName} && '${envManager.pythonPath}' '${script}'`;
+      console.log('[Python 服务] 执行完整命令:', fullCommand);
+      
+      pythonServiceProcess = spawn('bash', ['-c', fullCommand], {
+        cwd: cwd,
+        env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
+      });
+    }
+    
+    // 监听输出
+    pythonServiceProcess.stdout.on('data', (data) => {
+      const output = data.toString();
+      console.log(`[PBR Service] ${output}`);
+    });
+    
+    pythonServiceProcess.stderr.on('data', (data) => {
+      const error = data.toString();
+      console.error(`[PBR Service Error] ${error}`);
+    });
+    
+    pythonServiceProcess.on('close', (code) => {
+      console.log(`[Python 服务] 服务进程退出，代码：${code}`);
+      pythonServiceProcess = null;
+    });
+    
+    console.log(`[Python 服务] ✓ 服务启动成功，PID: ${pythonServiceProcess.pid}`);
+    
+    return {
+      success: true,
+      pid: pythonServiceProcess.pid,
+      message: 'Python service started successfully'
+    };
+  } catch (error) {
+    console.error('[Python 服务] 启动失败:', error);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+});
+
+// 停止 Python 服务
+ipcMain.handle('stop-python-service', async () => {
+  try {
+    if (pythonServiceProcess) {
+      pythonServiceProcess.kill();
+      pythonServiceProcess = null;
+      console.log('[Python 服务] ✓ 服务已停止');
+      return { success: true, message: 'Service stopped' };
+    } else {
+      console.log('[Python 服务] ⚠️ 没有正在运行的服务');
+      return { success: true, message: 'No running service' };
+    }
+  } catch (error) {
+    console.error('[Python 服务] 停止服务失败:', error);
     return { success: false, error: error.message };
   }
 });

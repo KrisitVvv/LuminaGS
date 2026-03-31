@@ -10,13 +10,19 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "vue": "^3.5.24",
-    "vue-router": "^4.5.0",
+    "@mkkellogg/gaussian-splats-3d": "^0.4.7",
     "echarts": "^6.0.0",
-    "systeminformation": "^5.30.7"
+    "gaussian-splats-3d": "^0.0.5",
+    "jszip": "^3.10.1",
+    "playcanvas": "^2.17.2",
+    "systeminformation": "^5.30.7",
+    "three": "^0.183.2",
+    "vue": "^3.5.24",
+    "vue-router": "^4.5.0"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^6.0.1",
+    "@webgpu/types": "^0.1.69",
     "concurrently": "^9.2.1",
     "electron": "^40.1.0",
     "vite": "^7.2.4"

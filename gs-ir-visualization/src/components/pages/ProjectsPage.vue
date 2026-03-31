@@ -30,6 +30,7 @@
           v-for="project in filteredProjects" 
           :key="project.projectId" 
           class="project-card"
+          @click="openProject(project)"
         >
           <div class="card-image">
             <img v-if="project.imageLoaded" :alt="project.name" :src="project.imageUrl">
@@ -46,10 +47,7 @@
                 @mousedown.stop.prevent="showContextMenu($event, project)"
                 @click.stop.prevent="showContextMenu($event, project)"
               >
-                <span 
-                  class="iconify menu-icon" 
-                  data-icon="solar:menu-dots-bold"
-                ></span>
+                <span class="iconify menu-icon" data-icon="solar:menu-dots-bold"></span>
               </div>
             </div>
           </div>
@@ -96,7 +94,6 @@
           </div>
         </div>
         
-        <!-- ✅ 新增：删除确认弹窗 -->
         <div v-if="deleteDialogVisible" class="delete-dialog-overlay" @click="closeDeleteDialog">
           <div class="delete-dialog" @click.stop>
             <div class="dialog-header danger-header">
@@ -162,12 +159,10 @@ export default {
       contextMenuVisible: false,
       contextMenuPosition: { top: 0, left: 0 },
       currentSelectedProject: null,
-      // ✅ 新增：重命名弹窗相关数据
       renameDialogVisible: false,
       newProjectName: '',
       errorMessage: '',
       isConfirming: false,
-      // ✅ 新增：删除弹窗相关数据
       deleteDialogVisible: false,
       deleteConfirmText: '',
       deleteErrorMessage: '',
@@ -198,47 +193,45 @@ export default {
           project.status === 'completed'
         );
       }
-      // 搜索时也只显示已完成的项目
       return this.projects.filter(project => 
         project.status === 'completed' &&
         project.name.toLowerCase().includes(this.searchQuery.toLowerCase())
       );
     },
-    
-    // ✅ 新增：删除按钮是否可用
     canDelete() {
       return this.deleteConfirmText === 'DELETE';
     }
   },
   methods: {
     async loadProjects() {
-      console.log('[ProjectsPage] 开始加载项目列表');
+      console.log('[ProjectsPage] 🔍 开始加载项目列表...');
       this.loading = true;
-      
+          
       try {
         const result = await window.electronAPI?.getProjectList();
-        
+            
         if (result?.success && result.data) {
           this.projects = result.data;
-          console.log(`[ProjectsPage] ✓ 加载了 ${this.projects.length} 个项目`);
+          console.log(`[ProjectsPage] ✅ 加载了 ${this.projects.length} 个项目`);
           this.projects.forEach((project, index) => {
             console.log(`[ProjectsPage] 项目 ${index + 1}:`, {
               projectId: project.projectId,
               name: project.name,
               status: project.status,
+              outputPath: project.outputPath || '无',
               thumbnailPath: project.thumbnailPath || '无',
               previewImagePath: project.previewImagePath || '无'
             });
           });
-          
-          //异步加载项目图片URL
+              
+          //异步加载项目图片 URL
           await this.loadAllProjectImages();
         } else {
-          console.error('[ProjectsPage] 加载失败:', result?.error);
+          console.error('[ProjectsPage] ❌ 加载失败:', result?.error);
           this.projects = [];
         }
       } catch (error) {
-        console.error('[ProjectsPage] 加载项目失败:', error);
+        console.error('[ProjectsPage] ❌ 加载项目失败:', error);
         this.projects = [];
       } finally {
         this.loading = false;
@@ -378,13 +371,72 @@ export default {
       this.$router.push({ name: 'train' });
     },
     
-    openProject(project) {
-      console.log('打开项目:', project.name, project.projectId);
-      // 跳转到 TrainPage，传递项目 ID
-      this.$router.push({ 
-        name: 'train', 
-        query: { projectId: project.projectId } 
-      });
+    async openProject(project) {
+      console.log('====== [ProjectsPage] 点击项目 ======');
+      console.log('[ProjectsPage] 打开项目:', project.name, project.projectId, project.outputPath);
+      console.log('[ProjectsPage] 完整项目数据:', JSON.stringify(project, null, 2));
+      
+      // 检查是否有项目 ID
+      if (!project.projectId) {
+        console.error('[ProjectsPage] ❌ 项目 ID 为空！');
+        return;
+      }
+      
+      // 检查是否有输出路径
+      if (!project.outputPath) {
+        console.warn('[ProjectsPage] ⚠️ 项目输出路径为空，使用默认值');
+        project.outputPath = `output/${project.projectId}`;
+      }
+      
+      console.log('[ProjectsPage] 🔄 准备打开 Editor 窗口...');
+      
+      try {
+        // 调用 Electron API 打开新的 Editor 窗口
+        const result = await window.electronAPI?.openEditorWindow({
+          projectId: project.projectId,
+          outputPath: project.outputPath,
+          checkpoint: 'chkpnt40000.pth' // 默认加载最新的 checkpoint
+        });
+        
+        if (result?.success) {
+          if (result.existed) {
+            console.log('[ProjectsPage] ℹ️ Editor 窗口已存在，已聚焦到该窗口');
+          } else {
+            console.log('[ProjectsPage] ✓ Editor 窗口已成功打开');
+          }
+        } else {
+          console.error('[ProjectsPage] ❌ 打开 Editor 窗口失败:', result?.error);
+          // 如果打开新窗口失败，尝试在当前页面跳转
+          console.log('[ProjectsPage] 🔄 尝试在当前页面打开...');
+          this.$router.push({ 
+            name: 'editor', 
+            params: { 
+              projectId: project.projectId 
+            },
+            query: {
+              outputPath: project.outputPath,
+              checkpoint: 'chkpnt40000.pth'
+            }
+          });
+        }
+      } catch (error) {
+        console.error('[ProjectsPage] ❌ 调用 Electron API 失败:', error);
+        // 降级方案：在当前页面跳转
+        console.log('[ProjectsPage] 🔄 降级方案：在当前页面打开 Editor...');
+        this.$router.push({ 
+          name: 'editor', 
+          params: { 
+            projectId: project.projectId 
+          },
+          query: {
+            outputPath: project.outputPath,
+            checkpoint: 'chkpnt40000.pth'
+          }
+        });
+      }
+      
+      console.log('[ProjectsPage] ✓ 操作完成');
+      console.log('====================================\n');
     },
     
     // ✅ 新增：显示上下文菜单
