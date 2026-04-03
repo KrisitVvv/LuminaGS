@@ -1538,7 +1538,7 @@ ipcMain.handle('spawn-python-process', async (event, config) => {
         childProcess.kill();
         console.log('[IPC] ✓ Python 进程已终止');
       } catch (killError) {
-        console.error('[IPC] ⚠️ 终止进程失败:', killError.message);
+        console.error('[IPC] 终止进程失败:', killError.message);
       }
       
       throw new Error('Python 程序加载超时（60 秒），请检查程序是否正常或尝试重新创建项目');

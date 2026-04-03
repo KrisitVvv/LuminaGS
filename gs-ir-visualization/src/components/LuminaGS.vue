@@ -34,10 +34,6 @@
                 <span class="icon iconify" data-icon="solar:folder-2-linear"></span>
                 <span class="nav-text">项目</span>
               </router-link>
-              <router-link class="nav-item" :to="{name: 'train'}" active-class="active-nav-item">
-                <span class="icon iconify" data-icon="solar:dumbbells-linear"></span>
-                <span class="nav-text">模型训练</span>
-              </router-link>
               <router-link class="nav-item" :to="{name: 'progress'}" active-class="active-nav-item">
                 <span class="icon iconify" data-icon="solar:chart-2-linear"></span>
                 <span class="nav-text">渲染进度</span>
@@ -54,9 +50,6 @@
               </router-link>
               <router-link class="nav-item-collapsed" :to="{name: 'projects'}" active-class="active-nav-item">
                 <span class="icon iconify" data-icon="solar:folder-2-linear"></span>
-              </router-link>
-              <router-link class="nav-item-collapsed" :to="{name: 'train'}" active-class="active-nav-item">
-                <span class="icon iconify" data-icon="solar:dumbbells-linear"></span>
               </router-link>
               <router-link class="nav-item-collapsed" :to="{name: 'progress'}" active-class="active-nav-item">
                 <span class="icon iconify" data-icon="solar:chart-2-linear"></span>

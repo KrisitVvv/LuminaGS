@@ -20,7 +20,7 @@
             <div 
               class="engine-option" 
               :class="{ 'selected': renderingEngine === 'webui' }"
-              @click="setRenderingEngine('webui')"
+              @click="showWebUINotAvailable"
             >
               <div class="option-header">
                 <span class="iconify engine-icon" data-icon="solar:globus-linear"></span>
@@ -30,30 +30,25 @@
             </div>
           </div>
         </div>
-        <div class="settings-section">
-          <h4 class="section-title">存储与缓存</h4>
-          <div class="settings-list">
-            <div class="setting-item">
-              <div class="setting-info">
-                <div class="setting-label">自动保存检查点</div>
-                <div class="setting-description">每训练 500 次迭代自动保存一次中间模型</div>
-              </div>
-              <div class="toggle-switch" :class="{ 'enabled': autoSaveEnabled }" @click="toggleAutoSave">
-                <div class="toggle-handle"></div>
-              </div>
-            </div>
-            <div class="setting-item">
-              <div class="setting-info">
-                <div class="setting-label">缓存目录</div>
-                <div class="setting-description">{{ cacheDirectory }}</div>
-              </div>
-              <button class="change-btn" @click="changeCacheDirectory">更改</button>
-            </div>
-          </div>
-        </div>
         <div class="actions-footer">
           <button class="reset-btn" @click="resetSettings">重置</button>
           <button class="apply-btn" @click="applySettings">应用更改</button>
+        </div>
+      </div>
+    </div>
+    <div v-if="webUINoticeVisible" class="notice-dialog-overlay" @click="closeWebUINotice">
+      <div class="notice-dialog" @click.stop>
+        <div class="dialog-header">
+          <h3 class="dialog-title">提示</h3>
+        </div>
+        <div class="dialog-content">
+          <div class="notice-content">
+            <span class="iconify notice-icon" data-icon="solar:info-circle-bold"></span>
+            <p class="notice-text">该功能暂不可用</p>
+          </div>
+        </div>
+        <div class="dialog-footer">
+          <button class="btn-confirm-notice" @click="closeWebUINotice">确定</button>
         </div>
       </div>
     </div>
@@ -67,7 +62,8 @@ export default {
     return {
       renderingEngine: 'cuda',
       autoSaveEnabled: true,
-      cacheDirectory: '/home/user/.cache/luminags'
+      cacheDirectory: '/home/user/.cache/luminags',
+      webUINoticeVisible: false
     }
   },
   methods: {
@@ -79,6 +75,12 @@ export default {
     },
     changeCacheDirectory() {
       console.log('更改缓存目录');
+    },
+    showWebUINotAvailable() {
+      this.webUINoticeVisible = true;
+    },
+    closeWebUINotice() {
+      this.webUINoticeVisible = false;
     },
     resetSettings() {
       this.renderingEngine = 'cuda';
@@ -301,6 +303,114 @@ export default {
 }
 
 .apply-btn:hover {
+  background-color: #6b21a8;
+}
+
+/* ✅ 新增：WebUI 提示弹窗样式 */
+.notice-dialog-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+  animation: overlayFadeIn 0.2s ease;
+}
+
+@keyframes overlayFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.notice-dialog {
+  background: white;
+  border-radius: 1rem;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(0, 0, 0, 0.05);
+  width: 100%;
+  max-width: 400px;
+  animation: dialogSlideIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  overflow: hidden;
+}
+
+@keyframes dialogSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-20px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem 1.5rem 0 1.5rem;
+  margin-bottom: 1rem;
+}
+
+.dialog-title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: #1e293b;
+  margin: 0;
+}
+
+.dialog-content {
+  padding: 0 1.5rem 1.5rem 1.5rem;
+}
+
+.notice-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  padding: 1rem 0;
+}
+
+.notice-icon {
+  font-size: 3rem;
+  color: #f59e0b;
+}
+
+.notice-text {
+  font-size: 1rem;
+  color: #475569;
+  margin: 0;
+  text-align: center;
+}
+
+.dialog-footer {
+  display: flex;
+  justify-content: center;
+  padding: 1rem 1.5rem 1.5rem 1.5rem;
+  background-color: #f8fafc;
+  border-top: 1px solid #e2e8f0;
+}
+
+.btn-confirm-notice {
+  padding: 0.625rem 1.5rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  border-radius: 0.5rem;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  background-color: #7e22ce;
+  color: white;
+}
+
+.btn-confirm-notice:hover {
   background-color: #6b21a8;
 }
 

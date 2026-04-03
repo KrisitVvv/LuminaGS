@@ -469,7 +469,7 @@ class RealtimeViewerGUI:
         return camera
     
     def _apply_pbr_relighting(self, rendering_result: Dict, c2w: torch.Tensor) -> torch.Tensor:
-        """应用 PBR 重光照"""
+        """应用 PBR 重光照（包含直接光照和间接光照）"""
         import torch.nn.functional as F
         
         # 确保 c2w 在 CUDA 上
@@ -478,10 +478,21 @@ class RealtimeViewerGUI:
         # 提取 PBR 材质参数
         albedo_map = rendering_result["albedo_map"]  # [3, H, W]
         roughness_map = rendering_result["roughness_map"]  # [1, H, W]
-        metallic_map = rendering_result["metallic_map"]  # [1, H, W]
+        metallic_map_from_checkpoint = rendering_result["metallic_map"]  # [1, H, W]
         normal_map = rendering_result["normal_map"]  # [3, H, W]
         depth_map = rendering_result["depth_map"]  # [1, H, W]
         normal_mask = rendering_result["normal_mask"]  # [1, H, W]
+        
+        # ✅ 根据用户设置动态调整 PBR 参数
+        use_metallic = self.pbr_settings.get('metallic', False)
+        use_shadow = self.pbr_settings.get('shadow', True)
+        use_indirect = self.pbr_settings.get('indirect', False)
+        
+        # 如果未启用 Metallic，则使用固定值（非金属）
+        if not use_metallic:
+            metallic_map = torch.zeros_like(metallic_map_from_checkpoint)
+        else:
+            metallic_map = metallic_map_from_checkpoint
         
         # 计算视线方向（世界坐标系）
         canonical_rays = self._get_canonical_rays()  # [H*W, 3]
@@ -501,20 +512,54 @@ class RealtimeViewerGUI:
         
         # 确保光源位置在世界坐标系中（不随相机变化）
         light_pos_world = self.light_position.cuda()
-        pbr_result = self._light_pbr_shading(
-            light_position=light_pos_world,
-            light_intensity=self.light_intensity,
-            points=points,
-            normals=normal_map.permute(1, 2, 0),
-            view_dirs=view_dirs,
-            mask=normal_mask.permute(1, 2, 0),
-            albedo=albedo_map.permute(1, 2, 0),
-            roughness=roughness_map.permute(1, 2, 0),  # [H, W, 1]
-            metallic=metallic_map.permute(1, 2, 0),  # [H, W, 1]
-            linear=False,
-        )
         
-        return pbr_result["render_rgb"].permute(2, 0, 1)  # [3, H, W]
+        # ✅ 1. 计算直接光照（Direct Lighting）
+        if use_shadow:
+            direct_result = self._light_pbr_shading(
+                light_position=light_pos_world,
+                light_intensity=self.light_intensity,
+                points=points,
+                normals=normal_map.permute(1, 2, 0),
+                view_dirs=view_dirs,
+                mask=normal_mask.permute(1, 2, 0),
+                albedo=albedo_map.permute(1, 2, 0),
+                roughness=roughness_map.permute(1, 2, 0),
+                metallic=metallic_map.permute(1, 2, 0),
+                linear=False,
+            )
+        else:
+            direct_result = self._light_pbr_shading_no_shadow(
+                light_position=light_pos_world,
+                light_intensity=self.light_intensity,
+                points=points,
+                normals=normal_map.permute(1, 2, 0),
+                view_dirs=view_dirs,
+                mask=normal_mask.permute(1, 2, 0),
+                albedo=albedo_map.permute(1, 2, 0),
+                roughness=roughness_map.permute(1, 2, 0),
+                metallic=metallic_map.permute(1, 2, 0),
+                linear=False,
+            )
+        
+        render_rgb = direct_result["render_rgb"]  # [H, W, 3]
+        
+        # ✅ 2. 计算间接光照（Indirect Lighting）
+        if use_indirect:
+            indirect_lighting = self._compute_indirect_lighting(
+                points=points,
+                normals=normal_map.permute(1, 2, 0),
+                view_dirs=view_dirs,
+                albedo=albedo_map.permute(1, 2, 0),
+                roughness=roughness_map.permute(1, 2, 0),
+                metallic=metallic_map.permute(1, 2, 0),
+                mask=normal_mask.permute(1, 2, 0),
+            )
+            
+            # 混合直接光照和间接光照
+            render_rgb = render_rgb + indirect_lighting
+            render_rgb = torch.clamp(render_rgb, 0.0, 1.0)
+        
+        return render_rgb.permute(2, 0, 1)  # [3, H, W]
     
     def _get_canonical_rays(self) -> torch.Tensor:
         """获取标准光线"""
@@ -639,6 +684,114 @@ class RealtimeViewerGUI:
         render_rgb = torch.where(mask, render_rgb, background)
         
         return {"render_rgb": render_rgb}
+    
+    def _light_pbr_shading_no_shadow(
+        self,
+        light_position: torch.Tensor,
+        light_intensity: torch.Tensor,
+        points: torch.Tensor,
+        normals: torch.Tensor,
+        view_dirs: torch.Tensor,
+        albedo: torch.Tensor,
+        roughness: torch.Tensor,
+        mask: torch.Tensor,
+        metallic: Optional[torch.Tensor] = None,
+        linear: bool = False,
+    ) -> Dict:
+        """PBR 着色函数（禁用阴影 - 移除距离衰减）"""
+        import torch.nn.functional as F
+        
+        # 准备向量
+        light_dirs = F.normalize(light_position - points, p=2, dim=-1)  # [H, W, 3]
+        half_dirs = (light_dirs + view_dirs) / 2.0  # [H, W, 3]
+        
+        # ✅ 禁用阴影：不使用距离衰减，所有点接收相同光照强度
+        radiance = light_intensity.expand_as(points)  # [H, W, 3] 均匀光照
+        
+        if metallic is None:
+            F0 = torch.ones_like(albedo) * 0.04  # [H, W, 3]
+        else:
+            F0 = (1.0 - metallic) * 0.04 + albedo * metallic  # [H, W, 3]
+        
+        # Cook-Torrance BRDF
+        NoV = self._saturate_dot(normals, view_dirs)  # [H, W, 1]
+        NoL = self._saturate_dot(normals, light_dirs)  # [H, W, 1]
+        HoV = self._saturate_dot(half_dirs, view_dirs)  # [H, W, 1]
+        NDF = self._distribution_ggx(normals=normals, half_dirs=half_dirs, roughness=roughness)  # [H, W, 1]
+        G = self._geometry_smith(normals=normals, view_dirs=view_dirs, light_dirs=light_dirs, roughness=roughness)  # [H, W, 1]
+        fresnel = self._fresnel_schlick(HoV=HoV, F0=F0)  # [H, W, 3]
+        
+        numerator = NDF * G * fresnel  # [H, W, 3]
+        denominator = 4.0 * NoV * NoL + 1e-4  # [H, W, 1]
+        specular = numerator / denominator  # [H, W, 3]
+        
+        kd = 1.0 - fresnel  # [H, W, 3]
+        if metallic is not None:
+            kd *= (1.0 - metallic)
+        
+        render_rgb = (kd * albedo / np.pi + specular) * radiance * NoL
+        
+        background = torch.zeros_like(normals)
+        render_rgb = torch.where(mask, render_rgb, background)
+        
+        return {"render_rgb": render_rgb}
+    
+    def _compute_indirect_lighting(
+        self,
+        points: torch.Tensor,  # [H, W, 3]
+        normals: torch.Tensor,  # [H, W, 3]
+        view_dirs: torch.Tensor,  # [H, W, 3]
+        albedo: torch.Tensor,  # [H, W, 3]
+        roughness: torch.Tensor,  # [H, W, 1]
+        metallic: torch.Tensor,  # [H, W, 1]
+        mask: torch.Tensor,  # [H, W, 1]
+    ) -> torch.Tensor:
+        """计算间接光照（环境光遮蔽 + 漫反射）"""
+        import numpy as np
+        
+        # ✅ 简化版间接光照模型：
+        # 1. 使用环境光遮蔽（AO）模拟全局阴影
+        # 2. 使用固定环境光颜色模拟天空光
+        
+        # 环境光参数
+        ambient_intensity = torch.tensor([0.1, 0.1, 0.15], dtype=torch.float32).cuda()  # 偏冷的环境光
+        sky_intensity = torch.tensor([0.05, 0.06, 0.08], dtype=torch.float32).cuda()  # 天空光
+        
+        # 计算法线与天顶方向的点积（模拟天空光角度衰减）
+        up_vector = torch.tensor([0.0, 1.0, 0.0], dtype=torch.float32).cuda()
+        NoUp = (normals * up_vector).sum(dim=-1, keepdim=True).clamp(0.0, 1.0)  # [H, W, 1]
+        
+        # 基础环境光
+        indirect_diffuse = ambient_intensity.expand_as(albedo)
+        
+        # 添加天空光贡献（法线朝上的表面接收更多天空光）
+        indirect_diffuse = indirect_diffuse + sky_intensity * NoUp
+        
+        # ✅ 粗糙度影响：粗糙表面散射更多环境光
+        roughness_factor = 1.0 - roughness * 0.5  # 光滑表面反射更强，漫反射更弱
+        
+        # ✅ Metallic 影响：金属表面几乎没有漫反射间接光
+        kd = (1.0 - metallic) * roughness_factor
+        
+        # 最终间接漫反射
+        indirect_diffuse = indirect_diffuse * kd * albedo / np.pi
+        
+        # ✅ 简单 AO 近似：基于深度变化率
+        # 深度梯度大的地方（边缘）AO 更强
+        depth_z = points[..., 2:3]  # [H, W, 1]
+        depth_dx = torch.abs(torch.gradient(depth_z, dim=1)[0])  # [H, W, 1]
+        depth_dy = torch.abs(torch.gradient(depth_z, dim=0)[0])  # [H, W, 1]
+        depth_gradient = depth_dx + depth_dy
+        ao_factor = 1.0 / (1.0 + depth_gradient * 0.5)  # 梯度越大，AO 越强
+        ao_factor = ao_factor.clamp(0.3, 1.0)  # 限制范围
+        
+        indirect_diffuse = indirect_diffuse * ao_factor
+        
+        # 应用遮罩
+        background = torch.zeros_like(indirect_diffuse)
+        indirect_diffuse = torch.where(mask, indirect_diffuse, background)
+        
+        return indirect_diffuse
     
     # ========== 事件处理方法 ==========
     
@@ -784,6 +937,19 @@ class RealtimeViewerGUI:
         self.pbr_settings['metallic'] = self.metallic_var.get()
         self.pbr_settings['indirect'] = self.indirect_var.get()
         self.pbr_settings['shadow'] = self.shadow_var.get()
+        
+        # ✅ 如果任意 PBR 选项被勾选，自动启用 PBR 渲染
+        if any([self.metallic_var.get(), self.indirect_var.get(), self.shadow_var.get()]):
+            if not self.enable_pbr:
+                self.enable_pbr = True
+                self.render_mode_var.set("relight")  # 同步更新渲染模式
+                print(f"[RealtimeViewer] ✓ 自动启用 PBR 渲染")
+        else:
+            # 如果所有选项都未勾选，可以关闭 PBR（可选）
+            # self.enable_pbr = False
+            # self.render_mode_var.set("normal")
+            pass
+        
         print(f"[RealtimeViewer] PBR 设置更新：{self.pbr_settings}")
     
     def _save_screenshot(self):

@@ -20,5 +20,15 @@
     "currentIteration": 0,
     "configFile": "E:\\GraduationProject\\Testoutput\\.luminags\\project_20260314_002_20260314_0104_v9j.json",
     "stage": "stage1"
+  },
+  {
+    "projectId": "project_20260403_233_20260403_2336_c56",
+    "name": "project_20260403_2336",
+    "outputPath": "E:\\GraduationProject\\output",
+    "lastModified": "2026-04-03T15:42:29.447Z",
+    "status": "training",
+    "currentIteration": 3200,
+    "configFile": "E:\\GraduationProject\\output\\.luminags\\project_20260403_233_20260403_2336_c56.json",
+    "stage": "stage1"
   }
 ]

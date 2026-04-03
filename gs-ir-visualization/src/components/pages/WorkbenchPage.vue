@@ -59,19 +59,19 @@
         <div class="quick-links-panel">
           <h3 class="panel-title">快速链接</h3>
           <div class="links-grid">
-            <button class="link-button" @click="navigateToEditor">
+            <button class="link-button" @click="navigateToTrain">
               <span class="iconify" data-icon="solar:document-add-linear"></span>
               <span class="link-text">新建渲染任务</span>
             </button>
-            <button class="link-button" @click="navigateToEditor">
+            <button class="link-button" @click="navigateToProjects">
               <span class="iconify" data-icon="solar:library-linear"></span>
               <span class="link-text">查看模型</span>
             </button>
-            <button class="link-button">
+            <button class="link-button" @click="navigateToSettings">
               <span class="iconify" data-icon="solar:settings-linear"></span>
               <span class="link-text">系统设置</span>
             </button>
-            <button class="link-button">
+            <button class="link-button" @click="navigateToProgress">
               <span class="iconify" data-icon="solar:chart-linear"></span>
               <span class="link-text">性能监控</span>
             </button>
@@ -90,12 +90,27 @@ export default {
   setup() {
     const router = useRouter()
     
-    const navigateToEditor = () => {
-      router.push({ name: 'editor' })
+    const navigateToTrain = () => {
+      router.push({ name: 'train' })
+    }
+    
+    const navigateToProjects = () => {
+      router.push({ name: 'projects' })
+    }
+    
+    const navigateToSettings = () => {
+      router.push({ name: 'settings' })
+    }
+    
+    const navigateToProgress = () => {
+      router.push({ name: 'progress' })
     }
     
     return {
-      navigateToEditor
+      navigateToTrain,
+      navigateToProjects,
+      navigateToSettings,
+      navigateToProgress
     }
   }
 }
