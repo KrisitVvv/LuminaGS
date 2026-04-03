@@ -55,7 +55,17 @@ class RealtimeViewerGUI:
             raise TypeError("Unsupported checkpoint format")
         
         self.gaussians.restore(model_params)
-        print("[RealtimeViewer] 模型加载完成", flush=True)  # ⭐ 关键信号！
+        print("[RealtimeViewer] 模型加载完成", flush=True)
+        
+        # ✅ 写入就绪信号文件（Electron 可以检测）
+        ready_signal_path = os.path.join(model_path, '.luminags', 'gui_ready.signal')
+        try:
+            os.makedirs(os.path.dirname(ready_signal_path), exist_ok=True)
+            with open(ready_signal_path, 'w', encoding='utf-8') as f:
+                f.write(f'GUI_READY|{os.getpid()}|{model_path}\n')
+            print(f"[RealtimeViewer] ✓ 就绪信号已写入：{ready_signal_path}", flush=True)
+        except Exception as e:
+            print(f"[RealtimeViewer] 写入信号文件失败：{e}", flush=True)
         
         # 获取参考相机
         self.views = self.scene.getTrainCameras()
@@ -253,7 +263,6 @@ class RealtimeViewerGUI:
         config_group.pack(fill=tk.X, pady=10)
         
         ttk.Button(config_group, text="💾 保存当前配置", command=self._save_user_config, style='Accent.TButton').pack(pady=8, padx=10, fill=tk.X)
-        ttk.Label(config_group, text="保存光源、渲染模式等设置", font=("Arial", 8), foreground="#666666").pack(anchor=tk.CENTER)
         
         # 渲染模式（从工具栏移过来）
         render_group = ttk.LabelFrame(panel, text="渲染模式", padding="10")

@@ -482,11 +482,22 @@ export default {
           scriptDir: 'E:\\GraduationProject\\LuminaGS\\GS-IR' // TODO: 脚本所在目录，需要从配置中读取
         });
         
+        // ✅ 根据结果处理加载状态
         if (result?.success) {
           console.log('[ProjectsPage] ✓ Python 进程启动成功，PID:', result.pid);
-          console.log('[ProjectsPage] ✓ GUI 已初始化完成，准备移除加载动画');
+          console.log('[ProjectsPage] ✓ GUI 已初始化完成，立即移除加载动画');
+          // ✅ 成功时立即移除加载状态
+          const index = this.loadingProjects.indexOf(project.projectId);
+          if (index > -1) {
+            this.loadingProjects.splice(index, 1);
+          }
         } else {
           console.error('[ProjectsPage] ❌ Python 进程启动失败:', result?.error);
+          // ✅ 失败时也移除加载状态
+          const index = this.loadingProjects.indexOf(project.projectId);
+          if (index > -1) {
+            this.loadingProjects.splice(index, 1);
+          }
         }
       } catch (error) {
         console.error('[ProjectsPage] ❌ 启动 Python 进程异常:', error);
@@ -502,15 +513,15 @@ ${error.message}
 2. 确认数据集大小是否正常
 3. 尝试重新创建项目`);
         }
-      } finally {
-        // ✅ 移除加载状态
+        
+        // ✅ 异常时也要移除加载状态
         const index = this.loadingProjects.indexOf(project.projectId);
         if (index > -1) {
           this.loadingProjects.splice(index, 1);
         }
-        console.log(`[ProjectsPage] ✅ 完成加载项目：${project.projectId}`);
       }
       
+      console.log(`[ProjectsPage] ✅ 完成加载项目：${project.projectId}`);
       console.log('[ProjectsPage] ✓ 操作完成');
       console.log('====================================\n');
     },

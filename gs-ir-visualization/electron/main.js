@@ -1441,36 +1441,69 @@ ipcMain.handle('spawn-python-process', async (event, config) => {
     // ✅ 监听 Python 输出，检测 GUI 初始化完成信号
     let isReady = false;
     let isTimeout = false;
+    
+    // ✅ 新增：轮询检测信号文件
+    const modelPath = cwd || '';
+    const signalFilePath = modelPath ? `${modelPath}\\.luminags\\gui_ready.signal` : null;
+    let signalFileDetected = false;
+    
     const readyPromise = new Promise((resolve) => {
-      // 超时保护：40 秒后自动认为就绪
+      // ✅ 启动信号文件轮询（每 500ms 检查一次）
+      let signalCheckInterval = null;
+      if (signalFilePath) {
+        signalCheckInterval = setInterval(() => {
+          if (signalFileDetected) return;
+          
+          try {
+            const fs = require('fs');
+            if (fs.existsSync(signalFilePath)) {
+              console.log('[IPC] ✓ 检测到信号文件:', signalFilePath);
+              signalFileDetected = true;
+              clearInterval(signalCheckInterval);
+              clearTimeout(timeoutHandle);
+              isReady = true;
+              resolve({ ready: true, timeout: false });
+            }
+          } catch (error) {
+            // 忽略错误，继续轮询
+          }
+        }, 500); // 每 500ms 检查一次
+      }
+      
+      // 超时保护：60 秒后自动认为超时（大模型可能需要更长时间）
       const timeoutHandle = setTimeout(() => {
         if (!isReady) {
-          console.log('[IPC] ⏰ 等待超时（40 秒）');
+          console.log('[IPC] ⏰ 等待超时（60 秒）');
           isTimeout = true;
           isReady = true; // 标记为就绪，但会抛出错误
           resolve({ ready: false, timeout: true });
+          if (signalCheckInterval) clearInterval(signalCheckInterval);
         }
-      }, 40000); // 40 秒
+      }, 60000); // ✅ 增加到 60 秒
       
-      // 监听 stdout，检测加载完成信号
+      // 监听 stdout，检测加载完成信号（作为信号文件的备用方案）
       childProcess.stdout.on('data', (data) => {
         const output = data.toString();
         console.log(`[Python stdout]: ${output}`);
         
-        if (!isReady) {
+        if (!isReady && !signalFileDetected) {
           // ✅ 检测关键信号（按优先级排序）：
           // 1. "Loading Test Cameras" - 最早的信号！表示开始处理相机数据
-          // 2. "100%" - 任意进度条完成
-          // 3. "模型加载完成" - 高斯模型已加载
-          // 4. "GUI initialized" / "窗口已创建"
-          // 5. 其他进度信息
+          // 2. "[RealtimeViewer] 模型加载完成" - 高斯模型已加载（精确匹配）
+          // 3. "模型加载完成" - 兼容其他格式
+          // 4. "100%" - 任意进度条完成
+          // 5. "GUI initialized" / "窗口已创建"
+          // 6. 其他进度信息
           if (output.includes('Loading Test Cameras') || 
+              output.includes('[RealtimeViewer] 模型加载完成') ||
+              output.includes('模型加载完成') ||
               output.includes('100%') ||
               /\d+\.\d+it\/s/.test(output) ||  // 匹配 "9.53it/s" 这样的速度输出
-              output.includes('模型加载完成') ||
               output.includes('GUI initialized') || 
-              output.includes('窗口已创建')) {
+              output.includes('窗口已创建') ||
+              output.includes('正在加载用户配置')) {  // 新增：检测配置加载
             clearTimeout(timeoutHandle);
+            if (signalCheckInterval) clearInterval(signalCheckInterval);
             isReady = true;
             console.log('[IPC] ✓ 检测到 GUI 初始化完成信号:', output.trim());
             resolve({ ready: true, timeout: false }); // 正常就绪
@@ -1508,7 +1541,7 @@ ipcMain.handle('spawn-python-process', async (event, config) => {
         console.error('[IPC] ⚠️ 终止进程失败:', killError.message);
       }
       
-      throw new Error('Python 程序加载超时（40 秒），请检查程序是否正常或尝试重新创建项目');
+      throw new Error('Python 程序加载超时（60 秒），请检查程序是否正常或尝试重新创建项目');
     }
     
     return {
