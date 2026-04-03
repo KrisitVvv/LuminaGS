@@ -11,6 +11,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 import threading
 import time
+import json
 import numpy as np
 import torch
 from typing import Dict, List, Optional, Tuple
@@ -35,12 +36,16 @@ class RealtimeViewerGUI:
         self.dataset = dataset
         self.pipeline = pipeline
         
+        # 配置文件路径
+        self.config_dir = os.path.join(model_path, '.luminags')
+        self.config_file = os.path.join(self.config_dir, 'config.json')
+        
         # 加载高斯模型
-        print("[RealtimeViewer] 正在加载高斯模型...")
+        print("[RealtimeViewer] 正在加载高斯模型...", flush=True)
         self.gaussians = GaussianModel(dataset.sh_degree)
         self.scene = Scene(dataset, self.gaussians, shuffle=False)
         
-        print(f"[RealtimeViewer] 正在加载 checkpoint: {checkpoint}")
+        print(f"[RealtimeViewer] 正在加载 checkpoint: {checkpoint}", flush=True)
         checkpoint_data = torch.load(checkpoint)
         if isinstance(checkpoint_data, Tuple):
             model_params = checkpoint_data[0]
@@ -50,7 +55,7 @@ class RealtimeViewerGUI:
             raise TypeError("Unsupported checkpoint format")
         
         self.gaussians.restore(model_params)
-        print("[RealtimeViewer] 模型加载完成")
+        print("[RealtimeViewer] 模型加载完成", flush=True)  # ⭐ 关键信号！
         
         # 获取参考相机
         self.views = self.scene.getTrainCameras()
@@ -71,8 +76,28 @@ class RealtimeViewerGUI:
         self.yaw = 0.0
         self.pitch = 0.0
         
-        # 光源参数
-        self.light_position = torch.tensor([0.0, 0.0, 5.0], dtype=torch.float32)
+        # 光源参数（初始化为场景前方）
+        # 计算场景的边界框来确定合适的光源位置
+        try:
+            xyz = self.gaussians.get_xyz
+            min_bound = xyz.min(dim=0)[0]
+            max_bound = xyz.max(dim=0)[0]
+            scene_center = (min_bound + max_bound) / 2
+            scene_size = max_bound - min_bound
+            max_dim = scene_size.max().item()
+            
+            # 将光源放在场景中心的右上方前方
+            light_offset = max_dim * 1.5
+            self.light_position = torch.tensor([
+                scene_center[0].item() + light_offset,
+                scene_center[1].item() + light_offset,
+                scene_center[2].item() + light_offset
+            ], dtype=torch.float32)
+            print(f"[RealtimeViewer] 光源初始位置：{self.light_position.cpu().numpy()}")
+        except:
+            # 如果无法计算，使用默认位置
+            self.light_position = torch.tensor([5.0, 5.0, 5.0], dtype=torch.float32)
+        
         self.light_intensity = torch.tensor([100.0, 100.0, 100.0], dtype=torch.float32).cuda()
         self.enable_pbr = False
         
@@ -102,8 +127,17 @@ class RealtimeViewerGUI:
         self.mouse_left_pressed = False
         self.mouse_right_pressed = False
         
+        # 加载用户配置
+        print("[RealtimeViewer] 正在加载用户配置...", flush=True)
+        self.user_config = self._load_user_config()
+        
         # 构建 GUI
         self._build_gui()
+        
+        # 应用用户配置（如果有）
+        if self.user_config:
+            print("[RealtimeViewer] 应用保存的用户配置...", flush=True)
+            self._apply_user_config()
         
         # 启动渲染循环
         self._start_render_loop()
@@ -214,13 +248,22 @@ class RealtimeViewerGUI:
         
         ttk.Button(view_group, text="重置视角", command=self._reset_view).pack(pady=5, padx=10, fill=tk.X)
         
+        # 💾 配置保存功能
+        config_group = ttk.LabelFrame(panel, text="配置管理", padding="10")
+        config_group.pack(fill=tk.X, pady=10)
+        
+        ttk.Button(config_group, text="💾 保存当前配置", command=self._save_user_config, style='Accent.TButton').pack(pady=8, padx=10, fill=tk.X)
+        ttk.Label(config_group, text="保存光源、渲染模式等设置", font=("Arial", 8), foreground="#666666").pack(anchor=tk.CENTER)
+        
         # 渲染模式（从工具栏移过来）
         render_group = ttk.LabelFrame(panel, text="渲染模式", padding="10")
         render_group.pack(fill=tk.X, pady=5)
         
-        self.render_mode_var = tk.StringVar(value="frontend")
-        ttk.Radiobutton(render_group, text="前端", variable=self.render_mode_var, value="frontend").pack(anchor=tk.W, padx=10)
-        ttk.Radiobutton(render_group, text="PBR", variable=self.render_mode_var, value="pbr").pack(anchor=tk.W, padx=10)
+        self.render_mode_var = tk.StringVar(value="normal")
+        ttk.Radiobutton(render_group, text="普通", variable=self.render_mode_var, value="normal",
+                       command=self._toggle_render_mode).pack(anchor=tk.W, padx=10)
+        ttk.Radiobutton(render_group, text="重光照", variable=self.render_mode_var, value="relight",
+                       command=self._toggle_render_mode).pack(anchor=tk.W, padx=10)
         
         # 截图功能
         screenshot_group = ttk.Frame(panel, padding="10")
@@ -234,17 +277,17 @@ class RealtimeViewerGUI:
         
         ttk.Label(light_group, text="位置 X:").pack(anchor=tk.W)
         self.light_x_var = tk.DoubleVar(value=0.0)
-        ttk.Scale(light_group, from_=-10, to=10, variable=self.light_x_var, 
+        ttk.Scale(light_group, from_=-20, to=20, variable=self.light_x_var, 
                   command=self._update_light_position).pack(fill=tk.X)
         
         ttk.Label(light_group, text="位置 Y:").pack(anchor=tk.W)
         self.light_y_var = tk.DoubleVar(value=0.0)
-        ttk.Scale(light_group, from_=-10, to=10, variable=self.light_y_var,
+        ttk.Scale(light_group, from_=-20, to=20, variable=self.light_y_var,
                   command=self._update_light_position).pack(fill=tk.X)
         
         ttk.Label(light_group, text="位置 Z:").pack(anchor=tk.W)
         self.light_z_var = tk.DoubleVar(value=5.0)
-        ttk.Scale(light_group, from_=0, to=20, variable=self.light_z_var,
+        ttk.Scale(light_group, from_=0, to=40, variable=self.light_z_var,
                   command=self._update_light_position).pack(fill=tk.X)
         
         # PBR 设置
@@ -337,6 +380,7 @@ class RealtimeViewerGUI:
             derive_normal=True,
         )
         
+        # 根据渲染模式选择处理方式
         if self.enable_pbr:
             render_rgb = self._apply_pbr_relighting(rendering_result, c2w)
         else:
@@ -417,11 +461,262 @@ class RealtimeViewerGUI:
     
     def _apply_pbr_relighting(self, rendering_result: Dict, c2w: torch.Tensor) -> torch.Tensor:
         """应用 PBR 重光照"""
-        # 简化版本，实际应该复用原来的 PBR 逻辑
-        return rendering_result["render"]
+        import torch.nn.functional as F
+        
+        # 确保 c2w 在 CUDA 上
+        c2w = c2w.cuda()
+        
+        # 提取 PBR 材质参数
+        albedo_map = rendering_result["albedo_map"]  # [3, H, W]
+        roughness_map = rendering_result["roughness_map"]  # [1, H, W]
+        metallic_map = rendering_result["metallic_map"]  # [1, H, W]
+        normal_map = rendering_result["normal_map"]  # [3, H, W]
+        depth_map = rendering_result["depth_map"]  # [1, H, W]
+        normal_mask = rendering_result["normal_mask"]  # [1, H, W]
+        
+        # 计算视线方向（世界坐标系）
+        canonical_rays = self._get_canonical_rays()  # [H*W, 3]
+        
+        # 将相机坐标系的光线转换到世界坐标系
+        world_rays = (c2w[:3, :3] @ canonical_rays.T).T  # [H*W, 3]
+        world_rays = F.normalize(world_rays, p=2, dim=-1)
+        
+        view_dirs = -world_rays.reshape(self.H, self.W, 3)  # [H, W, 3]
+        
+        # 计算 3D 点位置（世界坐标）
+        norm = torch.norm(canonical_rays, p=2, dim=-1).reshape(self.H, self.W, 1)
+        cam_pos_world = c2w[:3, 3]  # 相机位置
+        points = (
+            cam_pos_world + world_rays.reshape(-1, 3) * norm.reshape(-1, 1) * depth_map.reshape(-1, 1)
+        ).contiguous().reshape(self.H, self.W, 3)  # [H, W, 3] 世界坐标
+        
+        # 确保光源位置在世界坐标系中（不随相机变化）
+        light_pos_world = self.light_position.cuda()
+        pbr_result = self._light_pbr_shading(
+            light_position=light_pos_world,
+            light_intensity=self.light_intensity,
+            points=points,
+            normals=normal_map.permute(1, 2, 0),
+            view_dirs=view_dirs,
+            mask=normal_mask.permute(1, 2, 0),
+            albedo=albedo_map.permute(1, 2, 0),
+            roughness=roughness_map.permute(1, 2, 0),  # [H, W, 1]
+            metallic=metallic_map.permute(1, 2, 0),  # [H, W, 1]
+            linear=False,
+        )
+        
+        return pbr_result["render_rgb"].permute(2, 0, 1)  # [3, H, W]
+    
+    def _get_canonical_rays(self) -> torch.Tensor:
+        """获取标准光线"""
+        import numpy as np
+        import torch.nn.functional as F
+        
+        tan_fovx = np.tan(self.ref_view.FoVx * 0.5)
+        tan_fovy = np.tan(self.ref_view.FoVy * 0.5)
+        
+        cen_x = self.W / 2
+        cen_y = self.H / 2
+        focal_x = self.W / (2.0 * tan_fovx)
+        focal_y = self.H / (2.0 * tan_fovy)
+        
+        x, y = torch.meshgrid(
+            torch.arange(self.W, dtype=torch.float32, device='cuda'),
+            torch.arange(self.H, dtype=torch.float32, device='cuda'),
+            indexing="xy",
+        )
+        x = x.flatten()  # [H * W]
+        y = y.flatten()  # [H * W]
+        camera_dirs = F.pad(
+            torch.stack(
+                [
+                    (x - cen_x + 0.5) / focal_x,
+                    (y - cen_y + 0.5) / focal_y,
+                ],
+                dim=-1,
+            ),
+            (0, 1),
+            value=1.0,
+        )  # [H * W, 3]
+        
+        return camera_dirs
+    
+    def _saturate_dot(self, a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+        """饱和点积"""
+        return (a * b).sum(dim=-1, keepdim=True).clamp(min=0.0, max=1.0)
+    
+    def _distribution_ggx(self, normals: torch.Tensor, half_dirs: torch.Tensor, roughness: torch.Tensor) -> torch.Tensor:
+        """GGX 法线分布函数"""
+        a = roughness * roughness
+        a2 = a * a
+        NoH = self._saturate_dot(normals, half_dirs)
+        NoH2 = NoH * NoH
+        
+        nom = a2
+        denom = (NoH2 * (a2 - 1.0) + 1.0)
+        denom = np.pi * denom * denom
+        
+        return nom / denom
+    
+    def _geometry_schlick_ggx(self, NoV: torch.Tensor, roughness: torch.Tensor) -> torch.Tensor:
+        """Schlick-GGX 几何函数"""
+        r = roughness + 1.0
+        k = (r * r) / 8.0
+        nom = NoV
+        denom = NoV * (1.0 - k) + k
+        
+        return nom / denom
+    
+    def _geometry_smith(self, normals: torch.Tensor, view_dirs: torch.Tensor, light_dirs: torch.Tensor, roughness: torch.Tensor) -> torch.Tensor:
+        """Smith 几何函数"""
+        NoV = self._saturate_dot(normals, view_dirs)
+        NoL = self._saturate_dot(normals, light_dirs)
+        ggx2 = self._geometry_schlick_ggx(NoV, roughness)
+        ggx1 = self._geometry_schlick_ggx(NoL, roughness)
+        
+        return ggx1 * ggx2
+    
+    def _fresnel_schlick(self, HoV: torch.Tensor, F0: torch.Tensor) -> torch.Tensor:
+        """Fresnel-Schlick 函数"""
+        return F0 + (1.0 - F0) * torch.pow((1.0 - HoV).clamp(0.0, 1.0), 5)
+    
+    def _light_pbr_shading(
+        self,
+        light_position: torch.Tensor,
+        light_intensity: torch.Tensor,
+        points: torch.Tensor,
+        normals: torch.Tensor,
+        view_dirs: torch.Tensor,
+        albedo: torch.Tensor,
+        roughness: torch.Tensor,
+        mask: torch.Tensor,
+        metallic: Optional[torch.Tensor] = None,
+        linear: bool = False,
+    ) -> Dict:
+        """PBR 着色函数（基于 Cook-Torrance BRDF）"""
+        import torch.nn.functional as F
+        
+        # 准备向量
+        light_dirs = F.normalize(light_position - points, p=2, dim=-1)  # [H, W, 3]
+        half_dirs = (light_dirs + view_dirs) / 2.0  # [H, W, 3]
+        distance = torch.norm(light_position - points, p=2, dim=-1, keepdim=True)  # [H, W, 1]
+        attenuation = 1.0 / torch.pow(distance, 2)  # [H, W, 1]
+        radiance = light_intensity * attenuation  # [H, W, 3]
+        
+        if metallic is None:
+            F0 = torch.ones_like(albedo) * 0.04  # [H, W, 3]
+        else:
+            F0 = (1.0 - metallic) * 0.04 + albedo * metallic  # [H, W, 3]
+        
+        # Cook-Torrance BRDF
+        NoV = self._saturate_dot(normals, view_dirs)  # [H, W, 1]
+        NoL = self._saturate_dot(normals, light_dirs)  # [H, W, 1]
+        HoV = self._saturate_dot(half_dirs, view_dirs)  # [H, W, 1]
+        NDF = self._distribution_ggx(normals=normals, half_dirs=half_dirs, roughness=roughness)  # [H, W, 1]
+        G = self._geometry_smith(normals=normals, view_dirs=view_dirs, light_dirs=light_dirs, roughness=roughness)  # [H, W, 1]
+        fresnel = self._fresnel_schlick(HoV=HoV, F0=F0)  # [H, W, 3]
+        
+        numerator = NDF * G * fresnel  # [H, W, 3]
+        denominator = 4.0 * NoV * NoL + 1e-4  # [H, W, 1]
+        specular = numerator / denominator  # [H, W, 3]
+        
+        kd = 1.0 - fresnel  # [H, W, 3]
+        if metallic is not None:
+            kd *= (1.0 - metallic)
+        
+        render_rgb = (kd * albedo / np.pi + specular) * radiance * NoL
+        
+        background = torch.zeros_like(normals)
+        render_rgb = torch.where(mask, render_rgb, background)
+        
+        return {"render_rgb": render_rgb}
     
     # ========== 事件处理方法 ==========
     
+    def _load_user_config(self) -> Optional[Dict]:
+        """加载用户配置文件"""
+        try:
+            if os.path.exists(self.config_file):
+                with open(self.config_file, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                print(f"[RealtimeViewer] [OK] 已加载配置文件：{self.config_file}")
+                return config
+            else:
+                print(f"[RealtimeViewer] [INFO] 配置文件不存在，使用默认设置")
+                return None
+        except Exception as e:
+            print(f"[RealtimeViewer] [WARN] 加载配置失败：{e}")
+            return None
+    
+    def _save_user_config(self):
+        """保存用户配置文件"""
+        try:
+            # 确保目录存在
+            os.makedirs(self.config_dir, exist_ok=True)
+            
+            # 收集当前配置
+            config = {
+                'light_position': {
+                    'x': float(self.light_x_var.get()),
+                    'y': float(self.light_y_var.get()),
+                    'z': float(self.light_z_var.get())
+                },
+                'render_mode': self.render_mode_var.get(),
+                'pbr_settings': {
+                    'metallic': self.metallic_var.get(),
+                    'indirect': self.indirect_var.get(),
+                    'shadow': self.shadow_var.get()
+                },
+                'distance': float(self.distance),
+                'yaw': float(self.yaw),
+                'pitch': float(self.pitch)
+            }
+            
+            # 保存到文件
+            with open(self.config_file, 'w', encoding='utf-8') as f:
+                json.dump(config, f, indent=2, ensure_ascii=False)
+            
+            print(f"[RealtimeViewer] [OK] 配置已保存：{self.config_file}")
+            messagebox.showinfo("成功", f"配置已保存至:\n{self.config_file}")
+        except Exception as e:
+            print(f"[RealtimeViewer] [ERROR] 保存配置失败：{e}")
+            messagebox.showerror("错误", f"保存配置失败:\n{str(e)}")
+    
+    def _apply_user_config(self):
+        """应用用户配置"""
+        try:
+            # 光源位置
+            if 'light_position' in self.user_config:
+                light_pos = self.user_config['light_position']
+                self.light_x_var.set(light_pos.get('x', 0.0))
+                self.light_y_var.set(light_pos.get('y', 0.0))
+                self.light_z_var.set(light_pos.get('z', 5.0))
+                self._update_light_position()
+            
+            # 渲染模式
+            if 'render_mode' in self.user_config:
+                self.render_mode_var.set(self.user_config['render_mode'])
+                self._toggle_render_mode()
+            
+            # PBR 设置
+            if 'pbr_settings' in self.user_config:
+                pbr = self.user_config['pbr_settings']
+                self.metallic_var.set(pbr.get('metallic', False))
+                self.indirect_var.set(pbr.get('indirect', False))
+                self.shadow_var.set(pbr.get('shadow', True))
+                self._update_pbr_settings()
+            
+            # 相机视角
+            if 'distance' in self.user_config:
+                self.distance = float(self.user_config['distance'])
+            if 'yaw' in self.user_config:
+                self.yaw = float(self.user_config['yaw'])
+            if 'pitch' in self.user_config:
+                self.pitch = float(self.user_config['pitch'])
+            
+            print("[RealtimeViewer] [OK] 用户配置已应用")
+        except Exception as e:
+            print(f"[RealtimeViewer] [WARN] 应用配置失败：{e}")
     def _reset_view(self):
         """重置视角"""
         self.camera_center = torch.zeros(3)
@@ -464,6 +759,16 @@ class RealtimeViewerGUI:
             self.light_z_var.get()
         ], dtype=torch.float32)
         print(f"[RealtimeViewer] 光源位置：{self.light_position.cpu().numpy()}")
+    
+    def _toggle_render_mode(self):
+        """切换渲染模式"""
+        mode = self.render_mode_var.get()
+        if mode == "normal":
+            self.enable_pbr = False
+            print(f"[渲染模式] 普通渲染")
+        elif mode == "relight":
+            self.enable_pbr = True
+            print(f"[渲染模式] 重光照渲染")
     
     def _update_pbr_settings(self):
         """更新 PBR 设置"""

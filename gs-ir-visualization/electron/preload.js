@@ -82,6 +82,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   updateProjectConfig: (projectId, config) => ipcRenderer.invoke('update-project-config', { projectId, config }),
   // 更新项目阶段
   updateProjectStage: (projectId, stage) => ipcRenderer.invoke('update-project-stage', { projectId, stage }),
+  // 同步 sourcePath 字段到 projects.json
+  syncSourcePathToProjects: () => ipcRenderer.invoke('sync-source-path-to-projects'),
   // ✅ 新增：检查训练是否完成
   checkTrainingCompletion: (projectId) => ipcRenderer.invoke('check-training-completion', projectId),
   // 监听训练完成事件
@@ -96,6 +98,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deleteProjectAndOutput: (projectId, outputPath) => ipcRenderer.invoke('delete-project-and-output', { projectId, outputPath }),
   // 保存训练完成的项目到项目列表
   saveToProjectsList: (data) => ipcRenderer.invoke('save-to-projects-list', data),
+  // 启动 Python 脚本（使用 conda 环境）
+  spawnPythonProcess: (config) => ipcRenderer.invoke('spawn-python-process', config),
   // 启动 Python 服务（带 conda 环境）
   startPythonService: (config) => ipcRenderer.invoke('start-python-service', config),
   // 停止 Python 服务

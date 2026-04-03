@@ -26,10 +26,20 @@
       
       <!-- 项目列表 -->
       <div v-else class="projects-grid">
+        <!-- ✅ 全屏加载覆盖层 -->
+        <div v-if="loadingProjects.length > 0" class="fullscreen-loading-overlay">
+          <div class="loading-content">
+            <span class="iconify loading-spinner" data-icon="solar:spinner-4"></span>
+            <p class="loading-title">正在启动查看器...</p>
+            <p class="loading-subtitle">请稍候，查看器正在初始化</p>
+          </div>
+        </div>
+        
         <div 
           v-for="project in filteredProjects" 
           :key="project.projectId" 
           class="project-card"
+          :class="{ 'disabled': loadingProjects.includes(project.projectId) }"
           @click="openProject(project)"
         >
           <div class="card-image">
@@ -166,13 +176,24 @@ export default {
       deleteDialogVisible: false,
       deleteConfirmText: '',
       deleteErrorMessage: '',
-      isDeleting: false
+      isDeleting: false,
+      // ✅ 正在加载的项目 ID 集合（使用数组以保证响应式）
+      loadingProjects: []
     }
   },
   async created() {
     try {
       this.platform = await window.electronAPI?.getPlatform() || 'win32';
       console.log('[ProjectsPage] 操作系统平台:', this.platform);
+      
+      // 自动同步 sourcePath 字段
+      console.log('[ProjectsPage] 🔍 检查并同步 sourcePath 字段...');
+      const syncResult = await window.electronAPI?.syncSourcePathToProjects();
+      if (syncResult?.success) {
+        console.log(`[ProjectsPage] ✅ ${syncResult.message}`);
+        // 同步后重新加载项目列表
+        this.loadProjects();
+      }
     } catch (error) {
       console.error('[ProjectsPage] 获取平台失败:', error);
     }
@@ -388,51 +409,106 @@ export default {
         project.outputPath = `output/${project.projectId}`;
       }
       
-      console.log('[ProjectsPage] 🔄 准备打开 Editor 窗口...');
+      console.log('[ProjectsPage] 🐍 准备启动 Python 实时查看器...');
+      
+      // ✅ 检查是否已经在加载中
+      if (this.loadingProjects.includes(project.projectId)) {
+        console.warn('[ProjectsPage] ⚠️ 该项目已在加载中，忽略重复点击');
+        return;
+      }
       
       try {
-        // 调用 Electron API 打开新的 Editor 窗口
-        const result = await window.electronAPI?.openEditorWindow({
-          projectId: project.projectId,
-          outputPath: project.outputPath,
-          checkpoint: 'chkpnt40000.pth' // 默认加载最新的 checkpoint
+        // 设置加载状态
+        this.loadingProjects.push(project.projectId);
+        console.log(`[ProjectsPage] ⏳ 开始加载项目：${project.projectId}`);
+        
+        // 构建命令参数
+        const checkpointPath = `${project.outputPath}\\chkpnt40000.pth`;
+        
+        // 数据集路径：优先从项目配置中获取
+        // 注意：实际应该通过 project.configFile 读取详细配置文件获取 sourcePath
+        // 但当前 projects.json 已经包含 sourcePath 字段，简化处理直接使用
+        let sourcePath = project.datasetPath || project.sourcePath;
+        
+        console.log('[ProjectsPage] 🔍 检查项目配置数据:', {
+          hasConfigFile: !!project.configFile,
+          hasSourcePath: !!project.sourcePath,
+          hasDatasetPath: !!project.datasetPath,
+          configFile: project.configFile
+        });
+        
+        if (!sourcePath) {
+          console.error('[ProjectsPage] ❌ 项目数据集中路径缺失，项目已损坏！');
+          
+          // 弹出错误提示
+          alert(`项目已损坏
+
+项目名称：${project.name}
+
+错误原因：找不到数据集路径
+该项目的配置文件 (project.json) 中缺少 dataset_path 字段。
+
+请检查项目配置或重新创建项目。`);
+          
+          return; // 终止后续操作
+        } else {
+          console.log('[ProjectsPage] ✓ 使用项目配置的数据集路径:', sourcePath);
+        }
+        
+        const args = [
+          '-m', project.outputPath,
+          '-s', sourcePath,
+          '--checkpoint', checkpointPath,
+          '--resolution_scale', '1.0'
+        ];
+        
+        console.log('[ProjectsPage] 执行命令:', 'conda run -n gsir python', args.join(' '));
+        console.log('[ProjectsPage] 参数详情:', {
+          model_path: project.outputPath,
+          source_path: sourcePath,
+          checkpoint: checkpointPath,
+          resolution_scale: 1.0,
+          conda_env: 'gsir'
+        });
+        
+        // 调用 Electron API 启动 Python 脚本（使用 conda activate gsir）
+        // 工作目录设置为项目输出目录，确保能正确找到模型文件
+        const result = await window.electronAPI?.spawnPythonProcess({
+          script: 'realtime_gaussian_viewer_gui.py',
+          args: args,
+          cwd: project.outputPath, // 使用项目输出目录作为工作目录
+          useConda: true,          // 使用 conda 运行
+          condaEnv: 'gsir',        // 指定 conda 环境名称
+          scriptDir: 'E:\\GraduationProject\\LuminaGS\\GS-IR' // TODO: 脚本所在目录，需要从配置中读取
         });
         
         if (result?.success) {
-          if (result.existed) {
-            console.log('[ProjectsPage] ℹ️ Editor 窗口已存在，已聚焦到该窗口');
-          } else {
-            console.log('[ProjectsPage] ✓ Editor 窗口已成功打开');
-          }
+          console.log('[ProjectsPage] ✓ Python 进程启动成功，PID:', result.pid);
+          console.log('[ProjectsPage] ✓ GUI 已初始化完成，准备移除加载动画');
         } else {
-          console.error('[ProjectsPage] ❌ 打开 Editor 窗口失败:', result?.error);
-          // 如果打开新窗口失败，尝试在当前页面跳转
-          console.log('[ProjectsPage] 🔄 尝试在当前页面打开...');
-          this.$router.push({ 
-            name: 'editor', 
-            params: { 
-              projectId: project.projectId 
-            },
-            query: {
-              outputPath: project.outputPath,
-              checkpoint: 'chkpnt40000.pth'
-            }
-          });
+          console.error('[ProjectsPage] ❌ Python 进程启动失败:', result?.error);
         }
       } catch (error) {
-        console.error('[ProjectsPage] ❌ 调用 Electron API 失败:', error);
-        // 降级方案：在当前页面跳转
-        console.log('[ProjectsPage] 🔄 降级方案：在当前页面打开 Editor...');
-        this.$router.push({ 
-          name: 'editor', 
-          params: { 
-            projectId: project.projectId 
-          },
-          query: {
-            outputPath: project.outputPath,
-            checkpoint: 'chkpnt40000.pth'
-          }
-        });
+        console.error('[ProjectsPage] ❌ 启动 Python 进程异常:', error);
+        
+        // ✅ 检查是否是超时错误
+        if (error.message && error.message.includes('超时')) {
+          alert(`⚠️ 加载超时
+
+${error.message}
+
+建议：
+1. 检查计算机性能是否足够
+2. 确认数据集大小是否正常
+3. 尝试重新创建项目`);
+        }
+      } finally {
+        // ✅ 移除加载状态
+        const index = this.loadingProjects.indexOf(project.projectId);
+        if (index > -1) {
+          this.loadingProjects.splice(index, 1);
+        }
+        console.log(`[ProjectsPage] ✅ 完成加载项目：${project.projectId}`);
       }
       
       console.log('[ProjectsPage] ✓ 操作完成');
@@ -816,11 +892,79 @@ export default {
   height: 100%;
   min-height: 280px;
   max-height: 320px;
+  position: relative;
+}
+
+/* ✅ 加载状态 - 禁用点击 */
+.project-card.disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+  pointer-events: none;
 }
 
 .project-card:hover {
   box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
   border-color: #ddd6fe;
+}
+
+/* ✅ 全屏加载动画覆盖层 */
+.fullscreen-loading-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: 100vw;
+  height: 100vh;
+  background-color: rgba(255, 255, 255, 0.95);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  backdrop-filter: blur(8px);
+  animation: fadeIn 0.3s ease-out;
+}
+
+.loading-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1.5rem;
+}
+
+.loading-spinner {
+  font-size: 5rem;
+  color: #a855f7;
+  animation: spin 1s linear infinite;
+}
+
+.loading-title {
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: #1e293b;
+  margin: 0;
+}
+
+.loading-subtitle {
+  font-size: 1rem;
+  color: #64748b;
+  margin: 0;
+  font-weight: 400;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 .card-image {

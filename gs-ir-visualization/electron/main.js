@@ -1384,6 +1384,144 @@ ipcMain.handle('update-project-stage', async (event, data) => {
  }
 });
 
+// 同步 sourcePath 字段到 projects.json
+ipcMain.handle('sync-source-path-to-projects', async () => {
+  try {
+    const result = await projectManager.syncSourcePathToProjects();
+    return result;
+  } catch (error) {
+    console.error('[IPC] 同步 sourcePath 失败:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// 启动 Python 脚本（使用 conda 环境）
+ipcMain.handle('spawn-python-process', async (event, config) => {
+  try {
+    const { script, args = [], cwd = null, useConda = false, condaEnv = null, scriptDir = null } = config;
+    
+    if (!script) {
+      return { success: false, error: '缺少 script 参数' };
+    }
+    
+    // 构建命令
+    let command;
+    let spawnArgs = [];
+    let fullScriptPath = script;
+    
+    // 如果脚本不是绝对路径，需要拼接脚本所在目录
+    const path = require('path');
+    if (!path.isAbsolute(script)) {
+      // 优先使用 scriptDir，如果没有则使用 __dirname（electron 目录）
+      const baseDir = scriptDir || __dirname;
+      fullScriptPath = path.join(baseDir, script);
+      console.log(`[IPC] 解析脚本路径：${fullScriptPath}`);
+    }
+    
+    if (useConda && condaEnv) {
+      // 使用 conda run 运行 Python 脚本
+      command = 'conda';
+      spawnArgs = ['run', '-n', condaEnv, 'python', fullScriptPath, ...args];
+    } else {
+      // 直接使用 python 运行
+      command = 'python';
+      spawnArgs = [fullScriptPath, ...args];
+    }
+    
+    console.log(`[IPC] 准备启动 Python 脚本：${command} ${spawnArgs.join(' ')}`);
+    if (cwd) {
+      console.log(`[IPC] 工作目录：${cwd}`);
+    }
+    
+    // 启动子进程
+    const { spawn } = require('child_process');
+    const options = cwd ? { cwd } : {};
+    const childProcess = spawn(command, spawnArgs, options);
+    
+    // ✅ 监听 Python 输出，检测 GUI 初始化完成信号
+    let isReady = false;
+    let isTimeout = false;
+    const readyPromise = new Promise((resolve) => {
+      // 超时保护：40 秒后自动认为就绪
+      const timeoutHandle = setTimeout(() => {
+        if (!isReady) {
+          console.log('[IPC] ⏰ 等待超时（40 秒）');
+          isTimeout = true;
+          isReady = true; // 标记为就绪，但会抛出错误
+          resolve({ ready: false, timeout: true });
+        }
+      }, 40000); // 40 秒
+      
+      // 监听 stdout，检测加载完成信号
+      childProcess.stdout.on('data', (data) => {
+        const output = data.toString();
+        console.log(`[Python stdout]: ${output}`);
+        
+        if (!isReady) {
+          // ✅ 检测关键信号（按优先级排序）：
+          // 1. "Loading Test Cameras" - 最早的信号！表示开始处理相机数据
+          // 2. "100%" - 任意进度条完成
+          // 3. "模型加载完成" - 高斯模型已加载
+          // 4. "GUI initialized" / "窗口已创建"
+          // 5. 其他进度信息
+          if (output.includes('Loading Test Cameras') || 
+              output.includes('100%') ||
+              /\d+\.\d+it\/s/.test(output) ||  // 匹配 "9.53it/s" 这样的速度输出
+              output.includes('模型加载完成') ||
+              output.includes('GUI initialized') || 
+              output.includes('窗口已创建')) {
+            clearTimeout(timeoutHandle);
+            isReady = true;
+            console.log('[IPC] ✓ 检测到 GUI 初始化完成信号:', output.trim());
+            resolve({ ready: true, timeout: false }); // 正常就绪
+          }
+        }
+      });
+      
+      childProcess.stderr.on('data', (data) => {
+        console.error(`[Python stderr]: ${data.toString()}`);
+      });
+      
+      childProcess.on('close', (code) => {
+        console.log(`[Python] 子进程退出，代码：${code}`);
+        clearTimeout(timeoutHandle);
+        if (!isReady) {
+          resolve(false); // 进程异常退出
+        }
+      });
+    });
+    
+    console.log(`[IPC] ✓ Python 进程启动成功，PID: ${childProcess.pid}`);
+    
+    // ✅ 等待 GUI 就绪信号
+    const readyResult = await readyPromise;
+    
+    // ✅ 检查是否超时
+    if (!readyResult.ready) {
+      console.error('[IPC] ❌ 加载超时（40 秒），准备终止 Python 进程');
+      
+      // 终止 Python 进程
+      try {
+        childProcess.kill();
+        console.log('[IPC] ✓ Python 进程已终止');
+      } catch (killError) {
+        console.error('[IPC] ⚠️ 终止进程失败:', killError.message);
+      }
+      
+      throw new Error('Python 程序加载超时（40 秒），请检查程序是否正常或尝试重新创建项目');
+    }
+    
+    return {
+      success: true,
+      pid: childProcess.pid,
+      timeout: readyResult.timeout // 返回是否超时
+    };
+  } catch (error) {
+    console.error('[IPC] 启动 Python 进程失败:', error);
+    return { success: false, error: error.message };
+  }
+});
+
 // 检查训练是否完成（检测 chkpnt40000.pth）
 ipcMain.handle('check-training-completion', async (event, projectId) => {
  try {

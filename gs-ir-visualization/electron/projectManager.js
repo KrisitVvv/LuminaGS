@@ -192,13 +192,74 @@ class ProjectManager {
     }
   }
   
+  // 同步 sourcePath 字段到 projects.json
+  async syncSourcePathToProjects() {
+    try {
+      let syncCount = 0;
+      let updatedCount = 0;
+      
+      console.log('[ProjectManager] 🔍 开始同步 sourcePath 字段...');
+      
+      for (const project of this.projects) {
+        syncCount++;
+        
+        // 检查是否已经有 sourcePath
+        if (project.sourcePath) {
+          console.log(`[ProjectManager] ⏭️ 跳过（已有 sourcePath）: ${project.projectId}`);
+          continue;
+        }
+        
+        // 读取详细配置文件获取 sourcePath
+        try {
+          const configContent = await fs.readFile(project.configFile, 'utf8');
+          const projectConfig = JSON.parse(configContent);
+          
+          if (projectConfig.sourcePath) {
+            // 将 sourcePath 同步到 projects.json
+            project.sourcePath = projectConfig.sourcePath;
+            updatedCount++;
+            
+            console.log(`[ProjectManager] ✓ 已同步 sourcePath: ${project.projectId} -> ${projectConfig.sourcePath}`);
+          } else {
+            console.warn(`[ProjectManager] ⚠️ 配置文件中缺少 sourcePath: ${project.projectId}`);
+          }
+        } catch (readError) {
+          console.error(`[ProjectManager] ❌ 读取配置文件失败：${project.configFile}`, readError.message);
+        }
+      }
+      
+      // 保存更新后的 projects.json
+      if (updatedCount > 0) {
+        await this.saveProjects();
+        console.log(`[ProjectManager] ✅ 同步完成！总计：${syncCount} 个项目，已更新：${updatedCount} 个`);
+        return {
+          success: true,
+          message: `同步完成！总计 ${syncCount} 个项目，已更新 ${updatedCount} 个`,
+          total: syncCount,
+          updated: updatedCount
+        };
+      } else {
+        console.log(`[ProjectManager] ℹ️ 无需同步，所有项目已有 sourcePath 字段`);
+        return {
+          success: true,
+          message: '无需同步，所有项目已有 sourcePath 字段',
+          total: syncCount,
+          updated: 0
+        };
+      }
+    } catch (error) {
+      console.error('[ProjectManager] ❌ 同步 sourcePath 失败:', error);
+      return { success: false, error: error.message };
+    }
+  }
+  
   // 更新项目阶段 (baking 专用)
   async updateProjectStage(projectId, stage) {
  try {
   const projectIndex = this.projects.find(p => p.projectId === projectId);
    if (!projectIndex) {
  console.error(`[ProjectManager] 项目不存在：${projectId}`);
-   return { success: false, error: '项目不存在' };
+	return { success: false, error: '项目不存在' };
   }
   
   // 读取配置文件
@@ -219,7 +280,7 @@ class ProjectManager {
   );
   
   await this.saveProjects();
-  
+ 
  console.log(`[ProjectManager] 项目 ${projectId} 阶段已更新为 ${stage}`);
   return { success: true };
  } catch (error) {

@@ -8,7 +8,8 @@
     "currentIteration": 40000,
     "configFile": "E:\\GraduationProject\\Testoutput\\.luminags\\project_20260314_002_20260314_0025_jvi.json",
     "stage": "stage2",
-    "thumbnailPath": "E:\\GraduationProject\\Testoutput\\.luminags\\thumbnail_1773425750947.png"
+    "thumbnailPath": "E:\\GraduationProject\\Testoutput\\.luminags\\thumbnail_1773425750947.png",
+    "sourcePath": "E:\\GraduationProject\\tools\\GS-IR-main\\datasets\\nerf_real_360\\counter"
   },
   {
     "projectId": "project_20260314_002_20260314_0104_v9j",
