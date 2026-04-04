@@ -21,6 +21,7 @@ from arguments import GroupParams, ModelParams, PipelineParams, get_combined_arg
 from gaussian_renderer import GaussianModel, render
 from scene import Scene, Camera
 from utils.graphics_utils import getProjectionMatrix
+from diff_gaussian_rasterization import _C
 
 
 class RealtimeViewerGUI:
@@ -124,6 +125,11 @@ class RealtimeViewerGUI:
         self.quality_mode = "standard"  # "standard" 或 "high_quality"
         self.shadow_threshold = 2.0  # 阴影阈值，对应 light_move.py 中的 threshold 参数
         
+        # 深度立方体贴图缓存（避免每帧重新计算）
+        self.depth_cubemap_cache = None
+        self.last_light_position = None
+        self.cubemap_resolution = 128 # 立方体贴图分辨率
+        
         # 视图控制
         self.show_wireframe = False
         self.show_light_gizmo = True
@@ -143,6 +149,9 @@ class RealtimeViewerGUI:
         
         # 就绪信号文件路径（用于退出时清理）
         self.ready_signal_path = os.path.join(model_path, '.luminags', 'gui_ready.signal')
+        
+        # ✅ 性能优化：缓存背景色张量
+        self.bg_color = torch.tensor([0.0, 0.0, 0.0], dtype=torch.float32).cuda()
         
         # 加载用户配置
         print("[RealtimeViewer] 正在加载用户配置...", flush=True)
@@ -349,7 +358,7 @@ class RealtimeViewerGUI:
         # 整体强度控制
         ttk.Label(intensity_group, text="整体强度:").pack(anchor=tk.W)
         self.light_master_var = tk.DoubleVar(value=100.0)
-        self.master_scale = ttk.Scale(intensity_group, from_=0, to=200, variable=self.light_master_var,
+        self.master_scale = ttk.Scale(intensity_group, from_=0, to=500, variable=self.light_master_var,
                   command=self._update_light_master_intensity)
         self.master_scale.pack(fill=tk.X)
         
@@ -357,17 +366,17 @@ class RealtimeViewerGUI:
         
         ttk.Label(intensity_group, text="R 强度:").pack(anchor=tk.W)
         self.light_r_var = tk.DoubleVar(value=100.0)
-        ttk.Scale(intensity_group, from_=0, to=200, variable=self.light_r_var,
+        ttk.Scale(intensity_group, from_=0, to=500, variable=self.light_r_var,
                   command=self._update_light_intensity).pack(fill=tk.X)
         
         ttk.Label(intensity_group, text="G 强度:").pack(anchor=tk.W)
         self.light_g_var = tk.DoubleVar(value=100.0)
-        ttk.Scale(intensity_group, from_=0, to=200, variable=self.light_g_var,
+        ttk.Scale(intensity_group, from_=0, to=500, variable=self.light_g_var,
                   command=self._update_light_intensity).pack(fill=tk.X)
         
         ttk.Label(intensity_group, text="B 强度:").pack(anchor=tk.W)
         self.light_b_var = tk.DoubleVar(value=100.0)
-        ttk.Scale(intensity_group, from_=0, to=200, variable=self.light_b_var,
+        ttk.Scale(intensity_group, from_=0, to=500, variable=self.light_b_var,
                   command=self._update_light_intensity).pack(fill=tk.X)
         
         # 渲染模式设置
@@ -387,7 +396,7 @@ class RealtimeViewerGUI:
         
         ttk.Label(self.threshold_frame, text="阴影阈值:").pack(anchor=tk.W)
         self.shadow_threshold_var = tk.DoubleVar(value=2.0)
-        self.threshold_scale = ttk.Scale(self.threshold_frame, from_=0.1, to=10.0, variable=self.shadow_threshold_var,
+        self.threshold_scale = ttk.Scale(self.threshold_frame, from_=0.01, to=20.0, variable=self.shadow_threshold_var,
                   command=self._update_shadow_threshold)
         self.threshold_scale.pack(fill=tk.X)
         
@@ -474,20 +483,29 @@ class RealtimeViewerGUI:
         
         pipe = SimplePipe()
         
-        rendering_result = render(
-            viewpoint_camera=viewpoint_camera,
-            pc=self.gaussians,
-            pipe=pipe,
-            bg_color=torch.tensor([0.0, 0.0, 0.0], dtype=torch.float32).cuda(),
-            inference=True,
-            pad_normal=True,
-            derive_normal=True,
-        )
-        
-        # 根据渲染模式选择处理方式
+        # ✅ 性能优化：根据模式决定是否计算法线等PBR数据
         if self.enable_pbr:
+            rendering_result = render(
+                viewpoint_camera=viewpoint_camera,
+                pc=self.gaussians,
+                pipe=pipe,
+                bg_color=self.bg_color,
+                inference=True,
+                pad_normal=True,
+                derive_normal=True,
+            )
             render_rgb = self._apply_pbr_relighting(rendering_result, c2w)
         else:
+            # 标准模式：禁用不必要的法线计算，提升性能
+            rendering_result = render(
+                viewpoint_camera=viewpoint_camera,
+                pc=self.gaussians,
+                pipe=pipe,
+                bg_color=self.bg_color,
+                inference=True,
+                pad_normal=False,   # ✅ 关闭法线填充
+                derive_normal=False, # ✅ 关闭法线推导
+            )
             render_rgb = rendering_result["render"]
         
         # 转换为 numpy 数组
@@ -541,7 +559,7 @@ class RealtimeViewerGUI:
             import torch.nn.functional as F
             
             # 获取当前相机矩阵
-            c2w = self._get_current_c2w()
+            c2w = self._get_current_c2w().cuda()  # ✅ 确保在 CUDA 上
             w2c = torch.inverse(c2w)
             
             # 光源位置（世界坐标）
@@ -694,7 +712,7 @@ class RealtimeViewerGUI:
                     linear=False,
                 )
             else:
-                # 标准模式：使用传统PBR阴影
+                # 标准模式：使用带距离衰减的PBR阴影（无遮挡检测）
                 direct_result = self._light_pbr_shading(
                     light_position=light_pos_world,
                     light_intensity=self.light_intensity,
@@ -708,6 +726,7 @@ class RealtimeViewerGUI:
                     linear=False,
                 )
         else:
+            # 禁用阴影：使用均匀光照
             direct_result = self._light_pbr_shading_no_shadow(
                 light_position=light_pos_world,
                 light_intensity=self.light_intensity,
@@ -827,13 +846,15 @@ class RealtimeViewerGUI:
         metallic: Optional[torch.Tensor] = None,
         linear: bool = False,
     ) -> Dict:
-        """PBR 着色函数（基于 Cook-Torrance BRDF）"""
+        """PBR 着色函数（标准模式：带距离衰减，无遮挡检测）"""
         import torch.nn.functional as F
         
         # 准备向量
         light_dirs = F.normalize(light_position - points, p=2, dim=-1)  # [H, W, 3]
         half_dirs = (light_dirs + view_dirs) / 2.0  # [H, W, 3]
         distance = torch.norm(light_position - points, p=2, dim=-1, keepdim=True)  # [H, W, 1]
+        
+        # ✅ 标准模式：使用距离衰减模拟基本光照变化
         attenuation = 1.0 / torch.pow(distance, 2)  # [H, W, 1]
         radiance = light_intensity * attenuation  # [H, W, 3]
         
@@ -910,8 +931,11 @@ class RealtimeViewerGUI:
         if metallic is not None:
             kd *= (1.0 - metallic)
         
-        # 应用阴影贴图
-        render_rgb = (kd * albedo / np.pi + specular) * radiance * NoL * (1.0 - shadow_map)
+        # ✅ 与 light_move.py 一致的阴影应用方式
+        render_rgb = (kd * albedo / np.pi + specular) * radiance * NoL
+        
+        # 应用阴影：shadow_map=1(阴影) → 20%亮度, shadow_map=0(受光) → 100%亮度
+        render_rgb = torch.where(shadow_map == 0.0, render_rgb, render_rgb * 0.2)
         
         background = torch.zeros_like(normals)
         render_rgb = torch.where(mask, render_rgb, background)
@@ -969,78 +993,295 @@ class RealtimeViewerGUI:
         
         return {"render_rgb": render_rgb}
     
-    def _generate_depth_cubemap(self, light_pos: torch.Tensor, resolution: int = 512) -> torch.Tensor:
-        """生成光源视角的深度立方体贴图"""
+    def _generate_depth_cubemap(self, light_pos: torch.Tensor, resolution: int = None) -> torch.Tensor:
+        """生成光源视角的深度立方体贴图（模仿 light_move.py 的实现）"""
+        if resolution is None:
+            resolution = self.cubemap_resolution
+        
         import torch.nn.functional as F
         
-        # 6个方向的视图矩阵（+X, -X, +Y, -Y, +Z, -Z）
-        views = [
-            (torch.tensor([1, 0, 0], dtype=torch.float32), torch.tensor([0, -1, 0], dtype=torch.float32)),  # +X
-            (torch.tensor([-1, 0, 0], dtype=torch.float32), torch.tensor([0, -1, 0], dtype=torch.float32)), # -X
-            (torch.tensor([0, 1, 0], dtype=torch.float32), torch.tensor([0, 0, 1], dtype=torch.float32)),   # +Y
-            (torch.tensor([0, -1, 0], dtype=torch.float32), torch.tensor([0, 0, -1], dtype=torch.float32)), # -Y
-            (torch.tensor([0, 0, 1], dtype=torch.float32), torch.tensor([0, -1, 0], dtype=torch.float32)),   # +Z
-            (torch.tensor([0, 0, -1], dtype=torch.float32), torch.tensor([0, -1, 0], dtype=torch.float32)), # -Z
+        # 获取规范光线（用于深度归一化）
+        canonical_rays = self._get_canonical_rays_cubemap(resolution)
+        norm = torch.norm(canonical_rays, p=2, dim=-1).reshape(resolution, resolution, 1)
+        
+        bg_color = torch.zeros([3, resolution, resolution], device="cuda")
+        
+        # 6个方向的旋转矩阵（与 light_move.py 保持一致）
+        rotations = [
+            torch.tensor([
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, -1.0, 0.0, 0.0],
+                [-1.0, 0.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ]).cuda(),  # +X: lookAt([0,0,0], [-1,0,0], [0,-1,0])
+            torch.tensor([
+                [0.0, 0.0, -1.0, 0.0],
+                [0.0, -1.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ]).cuda(),  # -X: lookAt([0,0,0], [1,0,0], [0,-1,0])
+            torch.tensor([
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ]).cuda(),  # +Y: lookAt([0,0,0], [0,-1,0], [0,0,-1])
+            torch.tensor([
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 0.0, -1.0, 0.0],
+                [0.0, -1.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ]).cuda(),  # -Y: lookAt([0,0,0], [0,1,0], [0,0,1])
+            torch.tensor([
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, -1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ]).cuda(),  # +Z: lookAt([0,0,0], [0,0,-1], [0,1,0])
+            torch.tensor([
+                [-1.0, 0.0, 0.0, 0.0],
+                [0.0, -1.0, 0.0, 0.0],
+                [0.0, 0.0, -1.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ]).cuda(),  # -Z: lookAt([0,0,0], [0,0,1], [0,-1,0])
         ]
         
-        # 创建立方体贴图（这里我们简化处理，实际需要从场景中渲染深度）
-        # 由于高斯渲染的特殊性，我们需要使用近似方法
-        depth_cubemap = torch.zeros((6, resolution, resolution, 1), dtype=torch.float32)
+        zfar = 100.0
+        znear = 0.01
+        projection_matrix = (
+            getProjectionMatrix(znear=znear, zfar=zfar, fovX=np.pi * 0.5, fovY=np.pi * 0.5)
+            .transpose(0, 1)
+            .cuda()
+        )
         
-        # 注意：实际实现中，这需要从光源视角渲染场景深度图
-        # 由于高斯点云的特殊性，这需要额外的处理
-        # 这里我们返回一个占位符，实际应用中需要实现完整的深度图生成
+        depth_cubemap = []
         
-        return depth_cubemap.cuda()
+        # 准备高斯数据（只计算一次）
+        xyz = self.gaussians.get_xyz.detach().cuda()
+        opacity = self.gaussians.get_opacity.detach().cuda()
+        scaling = self.gaussians.get_scaling.detach().cuda()
+        rotation_gs = self.gaussians.get_rotation.detach().cuda()
+        features = self.gaussians.get_features.detach().cuda()
+        if len(features.shape) >= 2:
+            features = features[:, 0]
+        if len(features.shape) == 1:
+            features = features.unsqueeze(-1).repeat(1, 3)
+        
+        empty_tensor = torch.Tensor([]).cuda()
+        
+        for r_idx, rot_matrix in enumerate(rotations):
+            c2w = rot_matrix.clone()
+            c2w[:3, 3] = light_pos
+            w2c = torch.inverse(c2w)
+            T = w2c[:3, 3]
+            R = w2c[:3, :3].T
+            world_view_transform = self._getWorld2ViewTorch(R, T).transpose(0, 1)
+            full_proj_transform = (
+                world_view_transform.unsqueeze(0).bmm(projection_matrix.unsqueeze(0))
+            ).squeeze(0)
+            camera_center = world_view_transform.inverse()[3, :3]
+            
+            # 构造渲染参数
+            input_args = (
+                bg_color,
+                xyz,
+                empty_tensor,
+                opacity,
+                scaling,
+                rotation_gs,
+                empty_tensor,
+                features,
+                camera_center,
+                world_view_transform,
+                full_proj_transform,
+                1.0,   # scale_modifier
+                1.0,   # tanfovx
+                1.0,   # tanfovy
+                resolution,  # image_height
+                resolution,  # image_width
+                self.gaussians.active_sh_degree,
+                False,  # prefiltered
+                False,  # argmax_depth
+            )
+            
+            # 调用底层 CUDA 渲染函数
+            (num_rendered, rendered_image, opacity_map, radii, depth_map) = _C.lite_rasterize_gaussians(*input_args)
+            depth_cubemap.append(depth_map.permute(1, 2, 0))  # [H, W, 1]
+        
+        return torch.stack(depth_cubemap)  # [6, H, W, 1]
     
     def _calculate_high_quality_shadows(self, 
                                       light_pos: torch.Tensor, 
                                       points: torch.Tensor, 
                                       normal_map: torch.Tensor,
                                       depth_map: torch.Tensor) -> torch.Tensor:
-        """基于深度贴图计算高质量阴影"""
+        """基于深度立方体贴图计算高质量阴影（模仿 light_move.py）"""
         import torch.nn.functional as F
         
         H, W = points.shape[:2]
         
-        # 计算从点到光源的方向
+        # 检查是否需要重新生成立方体贴图
+        if (self.depth_cubemap_cache is None or 
+            self.last_light_position is None or
+            not torch.allclose(self.last_light_position, light_pos, atol=0.01)):
+            
+            print("[RealtimeViewer] 正在生成立方体贴图...")
+            self.depth_cubemap_cache = self._generate_depth_cubemap(light_pos, self.cubemap_resolution)
+            self.last_light_position = light_pos.clone()
+            print("[RealtimeViewer] 立方体贴图生成完成")
+        
+        depth_cubemap = self.depth_cubemap_cache
+        
+        # 计算从点到光源的方向和距离
         to_light = (light_pos[None, None, :] - points).reshape(H, W, 3)  # [H, W, 3]
-        distance_to_light = torch.norm(to_light, p=2, dim=-1, keepdim=True).reshape(H, W, 1)  # [H, W, 1]
+        distance_to_light = torch.norm(to_light, p=2, dim=-1, keepdim=True)  # [H, W, 1]
+        query_dirs = F.normalize(-to_light, p=2, dim=-1)  # [H, W, 3] 指向光源的方向
         
-        # 标准化光线方向
-        light_dirs = F.normalize(to_light, p=2, dim=-1).reshape(H, W, 3)  # [H, W, 3]
+        # 使用 nvdiffrast 进行立方体贴图采样（如果可用）
+        try:
+            import nvdiffrast.torch as dr
+            closest_depth = dr.texture(
+                depth_cubemap[None, ...],  # [1, 6, H, W, 1]
+                query_dirs[None, ...].contiguous(),  # [1, H, W, 3]
+                filter_mode="linear",
+                boundary_mode="cube",
+            )[0]  # [H, W, 1]
+        except ImportError:
+            # 如果没有 nvdiffrast，使用简化的最近邻采样
+            print("[警告] nvdiffrast 不可用，使用简化阴影计算")
+            closest_depth = self._simple_cubemap_sampling(depth_cubemap, query_dirs)
         
-        # 估算遮挡物深度 - 在高斯点云场景中，我们需要一种近似方法
-        # 这里我们使用一种简化的深度比较方法，模仿light_move.py中的逻辑
-        # 
-        # 注意：在实际的light_move.py中，会生成一个从光源视角的深度立方体贴图
-        # 然后比较每个像素到光源的距离与立方体贴图中的深度值
-        # 
-        # 由于我们没有真正的深度立方体贴图，这里使用一种简化的遮挡检测
-        # 基于深度梯度和点密度来估算遮挡
-        
-        # 使用深度图的梯度来估计遮挡
-        depth_z = points[..., 2:3]  # [H, W, 1]
-        depth_dx = torch.abs(torch.gradient(depth_z.squeeze(), dim=0)[0]).unsqueeze(-1)  # [H, W, 1]
-        depth_dy = torch.abs(torch.gradient(depth_z.squeeze(), dim=1)[0]).unsqueeze(-1)  # [H, W, 1]
-        depth_gradient = depth_dx + depth_dy
-        
-        # 使用距离衰减和深度梯度的组合来估计遮挡
-        # 这是一个简化的替代方法，因为完整实现需要从光源视角渲染深度图
-        
-        # 使用类似light_move.py中的阈值逻辑
-        # (distance_to_light - threshold > closest_depth) 来判断阴影
-        # 这里closest_depth用深度图近似
-        closest_depth = depth_map  # [H, W, 1]
-        
-        # 使用阈值计算阴影 - 模仿light_move.py的逻辑
+        # 使用阈值判断阴影（与 light_move.py 一致）
         threshold = self.shadow_threshold
-        shadows = (distance_to_light - threshold > closest_depth).float()
+        shadow = (distance_to_light - threshold > closest_depth).float()  # [H, W, 1]
         
-        # 对阴影进行平滑处理以减少锯齿
-        shadows = torch.clamp(shadows, 0.0, 1.0)
+        # ✅ 调试：输出阴影统计信息
+        if not hasattr(self, '_shadow_debug_counter'):
+            self._shadow_debug_counter = 0
+        self._shadow_debug_counter += 1
+        if self._shadow_debug_counter % 60 == 0:  # 每60帧输出一次
+            shadow_ratio = shadow.mean().item() * 100
+            print(f"[阴影调试] 覆盖率: {shadow_ratio:.1f}%, 阈值: {threshold}")
+            print(f"  距离范围: [{distance_to_light.min():.2f}, {distance_to_light.max():.2f}]")
+            print(f"  深度范围: [{closest_depth.min():.2f}, {closest_depth.max():.2f}]")
         
-        return shadows
+        return shadow
+    
+    def _getWorld2ViewTorch(self, R: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        """构建世界到相机变换矩阵（与 light_move.py 一致）"""
+        Rt = torch.zeros((4, 4), device=R.device)
+        Rt[:3, :3] = R[:3, :3].T
+        Rt[:3, 3] = t
+        Rt[3, 3] = 1.0
+        return Rt
+    
+    def _get_canonical_rays_cubemap(self, resolution: int) -> torch.Tensor:
+        """获取立方体贴图的规范光线"""
+        import torch.nn.functional as F
+        
+        cen_x = resolution / 2
+        cen_y = resolution / 2
+        focal_x = resolution / 2.0  # tan_fovx = 1.0
+        focal_y = resolution / 2.0  # tan_fovy = 1.0
+        
+        x, y = torch.meshgrid(
+            torch.arange(resolution, dtype=torch.float32, device='cuda'),
+            torch.arange(resolution, dtype=torch.float32, device='cuda'),
+            indexing="xy",
+        )
+        x = x.flatten()
+        y = y.flatten()
+        camera_dirs = F.pad(
+            torch.stack(
+                [
+                    (x - cen_x + 0.5) / focal_x,
+                    (y - cen_y + 0.5) / focal_y,
+                ],
+                dim=-1,
+            ),
+            (0, 1),
+            value=1.0,
+        )
+        return camera_dirs
+    
+    def _simple_cubemap_sampling(self, depth_cubemap: torch.Tensor, query_dirs: torch.Tensor) -> torch.Tensor:
+        """简化的立方体贴图采样（当 nvdiffrast 不可用时）"""
+        import torch.nn.functional as F
+        
+        H, W = query_dirs.shape[:2]
+        res = depth_cubemap.shape[1]  # 立方体贴图分辨率
+        
+        # 将方向向量转换为立方体面索引和 UV 坐标
+        dirs = query_dirs.reshape(-1, 3)  # [HW, 3]
+        abs_dirs = torch.abs(dirs)
+        
+        # 确定主轴线
+        max_axis = torch.argmax(abs_dirs, dim=1)  # [HW]
+        signs = torch.sign(dirs)
+        
+        # 计算面索引 (0:+X, 1:-X, 2:+Y, 3:-Y, 4:+Z, 5:-Z)
+        face_indices = torch.where(max_axis == 0, 
+                                   torch.where(signs[:, 0] > 0, 0, 1),
+                                   torch.where(max_axis == 1,
+                                              torch.where(signs[:, 1] > 0, 2, 3),
+                                              torch.where(signs[:, 2] > 0, 4, 5)))
+        
+        # 计算 UV 坐标
+        st = torch.zeros_like(dirs)
+        for i in range(6):
+            mask = face_indices == i
+            if not mask.any():
+                continue
+            
+            if i == 0:  # +X
+                st[mask] = torch.stack([-dirs[mask, 2], -dirs[mask, 1]], dim=1) / abs_dirs[mask, 0:1]
+            elif i == 1:  # -X
+                st[mask] = torch.stack([dirs[mask, 2], -dirs[mask, 1]], dim=1) / abs_dirs[mask, 0:1]
+            elif i == 2:  # +Y
+                st[mask] = torch.stack([dirs[mask, 0], dirs[mask, 2]], dim=1) / abs_dirs[mask, 1:2]
+            elif i == 3:  # -Y
+                st[mask] = torch.stack([dirs[mask, 0], -dirs[mask, 2]], dim=1) / abs_dirs[mask, 1:2]
+            elif i == 4:  # +Z
+                st[mask] = torch.stack([dirs[mask, 0], -dirs[mask, 1]], dim=1) / abs_dirs[mask, 2:3]
+            elif i == 5:  # -Z
+                st[mask] = torch.stack([-dirs[mask, 0], -dirs[mask, 1]], dim=1) / abs_dirs[mask, 2:3]
+        
+        # 转换到纹理坐标 [0, 1]
+        uv = (st[:, :2] + 1.0) / 2.0  # [HW, 2]
+        uv = uv.clamp(0.0, 1.0)
+        
+        # 采样每个面的深度图
+        sampled_depths = torch.zeros(H * W, 1, device=depth_cubemap.device)
+        for i in range(6):
+            mask = face_indices == i
+            if not mask.any():
+                continue
+            
+            face_depth = depth_cubemap[i]  # [res, res, 1]
+            face_uv = uv[mask]  # [N, 2]
+            
+            # 双线性插值采样
+            u = face_uv[:, 0] * (res - 1)
+            v = face_uv[:, 1] * (res - 1)
+            
+            u0 = torch.floor(u).long().clamp(0, res - 2)
+            v0 = torch.floor(v).long().clamp(0, res - 2)
+            u1 = u0 + 1
+            v1 = v0 + 1
+            
+            fu = (u - u0.float()).unsqueeze(1)
+            fv = (v - v0.float()).unsqueeze(1)
+            
+            d00 = face_depth[v0, u0]
+            d01 = face_depth[v0, u1]
+            d10 = face_depth[v1, u0]
+            d11 = face_depth[v1, u1]
+            
+            d0 = d00 * (1 - fu) + d01 * fu
+            d1 = d10 * (1 - fu) + d11 * fu
+            sampled_depths[mask] = d0 * (1 - fv) + d1 * fv
+        
+        return sampled_depths.reshape(H, W, 1)
     
     def _compute_indirect_lighting(
         self,
@@ -1303,7 +1544,9 @@ class RealtimeViewerGUI:
     
     def _toggle_quality_mode(self):
         """切换渲染质量模式"""
+        old_mode = self.quality_mode
         self.quality_mode = self.quality_mode_var.get()
+        
         if self.quality_mode == "high_quality":
             print("[RealtimeViewer] 切换到高质量模式（基于深度贴图的阴影）")
             # 显示阴影阈值控制
@@ -1312,6 +1555,11 @@ class RealtimeViewerGUI:
             print("[RealtimeViewer] 切换到标准模式")
             # 隐藏阴影阈值控制
             self.threshold_frame.pack_forget()
+            # ✅ 关键修复：清除立方体贴图缓存，释放显存
+            if old_mode == "high_quality":
+                self.depth_cubemap_cache = None
+                self.last_light_position = None
+                print("[RealtimeViewer] 已清除立方体贴图缓存")
     
     def _update_shadow_threshold(self, val=None):
         """更新阴影阈值"""
