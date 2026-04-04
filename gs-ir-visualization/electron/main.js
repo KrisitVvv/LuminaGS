@@ -2840,3 +2840,38 @@ ipcMain.handle('get-queue-status', async () => {
     return { success: false, error: error.message };
   }
 });
+
+// 获取目录大小
+ipcMain.handle('get-directory-size', async (event, dirPath) => {
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    
+    if (!dirPath || !fs.existsSync(dirPath)) {
+      return { success: false, error: '目录不存在' };
+    }
+    
+    let totalSize = 0;
+    
+    function calculateSize(currentPath) {
+      const stats = fs.statSync(currentPath);
+      
+      if (stats.isFile()) {
+        totalSize += stats.size;
+      } else if (stats.isDirectory()) {
+        const files = fs.readdirSync(currentPath);
+        for (const file of files) {
+          const filePath = path.join(currentPath, file);
+          calculateSize(filePath);
+        }
+      }
+    }
+    
+    calculateSize(dirPath);
+    
+    return { success: true, data: totalSize };
+  } catch (error) {
+    console.error('[IPC] 获取目录大小失败:', error);
+    return { success: false, error: error.message };
+  }
+});

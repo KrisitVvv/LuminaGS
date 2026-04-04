@@ -94,6 +94,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getProjectConfig: (projectId) => ipcRenderer.invoke('get-project-config', projectId),
   // 删除项目输出目录
   deleteOutputDirectory: (outputPath) => ipcRenderer.invoke('delete-output-directory', outputPath),
+  // 获取目录大小
+  getDirectorySize: (dirPath) => ipcRenderer.invoke('get-directory-size', dirPath),
   // 删除项目及其输出
   deleteProjectAndOutput: (projectId, outputPath) => ipcRenderer.invoke('delete-project-and-output', { projectId, outputPath }),
   // 保存训练完成的项目到项目列表

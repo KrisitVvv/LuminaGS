@@ -124,15 +124,7 @@ export default {
   data() {
     return {
       renderProgress: 65,
-      trainingLogs: [
-        '[INFO] 初始化 Gaussian Splatting 模型',
-        '[INFO] 加载训练数据集: urban_scene',
-        '[INFO] 设置学习率: 0.001',
-        '[INFO] 开始第 12500 次迭代',
-        '[DEBUG] 当前 PSNR: 28.4 dB',
-        '[DEBUG] Loss: 0.0234',
-        '[INFO] VRAM 使用率: 85%'
-      ],
+      trainingLogs: [],
       // GPU监控数据
       gpuChart: null,
       gpuMonitorTimer: null,
@@ -171,7 +163,6 @@ export default {
     this.$nextTick(() => {
       this.initChart();
       this.startGpuMonitoring();
-      this.updateTrainingLogs();
         
       // 加载项目队列
       this.loadProjectQueue();
@@ -210,6 +201,24 @@ export default {
       window.electronAPI.onTrainingQueueUpdate((data) => {
         console.log('[队列更新] 收到队列更新:', data);
         this.loadProjectQueue();
+      });
+    }
+    
+    // 监听训练输出
+    if (window.electronAPI?.onTrainingOutput) {
+      window.electronAPI.onTrainingOutput((data) => {
+        if (data && data.output) {
+          this.addTrainingLog(data.output);
+        }
+      });
+    }
+    
+    // 监听烘焙输出
+    if (window.electronAPI?.onBakingOutput) {
+      window.electronAPI.onBakingOutput((data) => {
+        if (data && data.output) {
+          this.addTrainingLog(data.output);
+        }
       });
     }
   },
@@ -841,24 +850,30 @@ export default {
       }
     },
 
-    // 更新训练日志
+    // 更新训练日志（已废弃，使用实时监听）
     updateTrainingLogs() {
-      setInterval(() => {
-        const timestamp = new Date().toISOString().slice(0, 19).replace('T', ' ');
-        
-        // 根据当前GPU状态生成相关日志
-        const logs = [
-          `[${timestamp}] Iteration ${Math.floor(10000 + Math.random() * 20000)} | Loss: ${(0.001 + Math.random() * 0.01).toFixed(4)} | PSNR: ${(25 + Math.random() * 10).toFixed(2)}dB`,
-          `[${timestamp}] GPU状态 - 使用率: ${this.currentGpuData.utilization}% | 显存: ${Math.round((this.currentGpuData.memoryUsed / (1024 * 1024)).toFixed(1))}MB/${Math.round((this.currentGpuData.memoryTotal / (1024 * 1024)).toFixed(1))}MB (${Math.round((this.currentGpuData.memoryUsed / this.currentGpuData.memoryTotal) * 100)}%)`,
-          `[${timestamp}] 系统监控 - 温度: ${this.currentGpuData.temperature}°C | 功耗: ${Math.round(this.currentGpuData.power)}W | 风扇: ${this.currentGpuData.fanSpeed}%`
-        ];
-        
-        // 添加新日志并保持数组长度
-        this.trainingLogs.push(logs[Math.floor(Math.random() * logs.length)]);
-        if (this.trainingLogs.length > 20) {
-          this.trainingLogs.shift();
+      // 此方法已被实时监听替代
+    },
+    
+    // 添加训练日志
+    addTrainingLog(logText) {
+      if (!logText) return;
+      
+      // 添加到日志数组
+      this.trainingLogs.push(logText);
+      
+      // 保持最多100条日志
+      if (this.trainingLogs.length > 100) {
+        this.trainingLogs.shift();
+      }
+      
+      // 自动滚动到底部
+      this.$nextTick(() => {
+        const logsContainer = document.querySelector('.logs-container');
+        if (logsContainer) {
+          logsContainer.scrollTop = logsContainer.scrollHeight;
         }
-      }, 3000);
+      });
     },
     
     // 处理文档点击事件，用于关闭下拉列表
