@@ -366,9 +366,11 @@ class RealtimeViewerGUI:
         render_group.pack(fill=tk.X, pady=5)
         
         self.render_mode_var = tk.StringVar(value="normal")
-        ttk.Radiobutton(render_group, text="普通", variable=self.render_mode_var, value="normal",
+        ttk.Radiobutton(render_group, text="普通模式", variable=self.render_mode_var, value="normal",
                        command=self._toggle_render_mode).pack(anchor=tk.W, padx=10)
-        ttk.Radiobutton(render_group, text="重光照", variable=self.render_mode_var, value="relight",
+        ttk.Radiobutton(render_group, text="标准重光照", variable=self.render_mode_var, value="standard_relight",
+                       command=self._toggle_render_mode).pack(anchor=tk.W, padx=10)
+        ttk.Radiobutton(render_group, text="增强重光照", variable=self.render_mode_var, value="enhanced_relight",
                        command=self._toggle_render_mode).pack(anchor=tk.W, padx=10)
         
         # 截图功能
@@ -423,30 +425,6 @@ class RealtimeViewerGUI:
         self.light_b_var = tk.DoubleVar(value=100.0)
         ttk.Scale(intensity_group, from_=0, to=500, variable=self.light_b_var,
                   command=self._update_light_intensity).pack(fill=tk.X)
-        
-        # 渲染模式设置
-        quality_group = ttk.LabelFrame(scrollable_frame, text="渲染模式设置", padding="10")
-        quality_group.pack(fill=tk.X, pady=5)
-        
-        # 渲染质量模式选择
-        self.quality_mode_var = tk.StringVar(value="standard")
-        ttk.Radiobutton(quality_group, text="标准模式", variable=self.quality_mode_var, value="standard",
-                       command=self._toggle_quality_mode).pack(anchor=tk.W, padx=10)
-        ttk.Radiobutton(quality_group, text="高质量阴影模式", variable=self.quality_mode_var, value="high_quality",
-                       command=self._toggle_quality_mode).pack(anchor=tk.W, padx=10)
-        
-        # 阴影阈值控制（仅在高质量模式下显示）
-        self.threshold_frame = ttk.Frame(quality_group)
-        self.threshold_frame.pack(fill=tk.X, pady=(5, 0))
-        
-        ttk.Label(self.threshold_frame, text="阴影阈值:").pack(anchor=tk.W)
-        self.shadow_threshold_var = tk.DoubleVar(value=2.0)
-        self.threshold_scale = ttk.Scale(self.threshold_frame, from_=0.01, to=20.0, variable=self.shadow_threshold_var,
-                  command=self._update_shadow_threshold)
-        self.threshold_scale.pack(fill=tk.X)
-        
-        # 初始状态：隐藏阈值控制（默认是标准模式）
-        self.threshold_frame.pack_forget()
         
         # PBR 设置
         pbr_group = ttk.LabelFrame(scrollable_frame, text="PBR 设置", padding="10")
@@ -1460,8 +1438,6 @@ class RealtimeViewerGUI:
                     'b': float(self.light_b_var.get()),
                     'master': float(self.light_master_var.get())
                 },
-                'quality_mode': self.quality_mode_var.get(),
-                'shadow_threshold': float(self.shadow_threshold_var.get()),
                 'render_mode': self.render_mode_var.get(),
                 'pbr_settings': {
                     'metallic': self.metallic_var.get(),
@@ -1507,19 +1483,6 @@ class RealtimeViewerGUI:
                 self.light_b_var.set(light_intensity.get('b', 100.0))
                 self.light_master_var.set(light_intensity.get('master', 100.0))
                 self._update_light_intensity()
-            
-            # 渲染质量模式
-            if 'quality_mode' in self.user_config:
-                self.quality_mode_var.set(self.user_config['quality_mode'])
-                self.quality_mode = self.user_config['quality_mode']
-                # 如果是高质量模式，显示阈值控制
-                if self.quality_mode == "high_quality":
-                    self.threshold_frame.pack(fill=tk.X, pady=(5, 0))
-            
-            # 阴影阈值
-            if 'shadow_threshold' in self.user_config:
-                self.shadow_threshold_var.set(self.user_config['shadow_threshold'])
-                self.shadow_threshold = float(self.user_config['shadow_threshold'])
             
             # 渲染模式
             if 'render_mode' in self.user_config:
@@ -1626,48 +1589,27 @@ class RealtimeViewerGUI:
         self.light_intensity = torch.tensor([master_value, master_value, master_value], dtype=torch.float32).cuda()
         print(f"[RealtimeViewer] 整体光照强度：{master_value}")
     
-    def _toggle_quality_mode(self):
-        """切换渲染质量模式"""
-        # ✅ 检查是否被禁用
-        if self.high_quality_disabled:
-            messagebox.showwarning("显存不足", 
-                f"您的GPU显存仅 {self.vram_gb:.1f} GB，不足以运行高质量阴影模式（需要至少4GB）。\n\n"
-                f"建议使用标准模式以获得流畅体验。")
-            # 强制切回标准模式
-            self.quality_mode_var.set("standard")
-            return
-        
-        old_mode = self.quality_mode
-        self.quality_mode = self.quality_mode_var.get()
-        
-        if self.quality_mode == "high_quality":
-            print(f"[RealtimeViewer] 切换到高质量模式（分辨率: {self.cubemap_resolution}）")
-            # 显示阴影阈值控制
-            self.threshold_frame.pack(fill=tk.X, pady=(5, 0), before=self.pbr_group if hasattr(self, 'pbr_group') else None)
-        else:
-            print("[RealtimeViewer] 切换到标准模式")
-            # 隐藏阴影阈值控制
-            self.threshold_frame.pack_forget()
-            # ✅ 关键修复：清除立方体贴图缓存，释放显存
-            if old_mode == "high_quality":
-                self.depth_cubemap_cache = None
-                self.last_light_position = None
-                print("[RealtimeViewer] 已清除立方体贴图缓存")
-    
-    def _update_shadow_threshold(self, val=None):
-        """更新阴影阈值"""
-        self.shadow_threshold = float(self.shadow_threshold_var.get())
-        print(f"[RealtimeViewer] 阴影阈值：{self.shadow_threshold}")
-    
     def _toggle_render_mode(self):
         """切换渲染模式"""
         mode = self.render_mode_var.get()
+        
         if mode == "normal":
+            # 普通模式：不开启重光照
             self.enable_pbr = False
-            print(f"[渲染模式] 普通渲染")
-        elif mode == "relight":
+            self.quality_mode = "standard"
+            print("[渲染模式] 普通模式（无PBR）")
+            
+        elif mode == "standard_relight":
+            # 标准重光照：启用PBR，使用标准阴影（距离衰减）
             self.enable_pbr = True
-            print(f"[渲染模式] 重光照渲染")
+            self.quality_mode = "standard"
+            print("[渲染模式] 标准重光照（PBR + 标准阴影）")
+            
+        elif mode == "enhanced_relight":
+            # 增强重光照：启用PBR，使用高质量阴影（深度立方体贴图）
+            self.enable_pbr = True
+            self.quality_mode = "high_quality"
+            print("[渲染模式] 增强重光照（PBR + 高质量阴影）")
     
     def _update_pbr_settings(self):
         """更新 PBR 设置"""
@@ -1675,12 +1617,13 @@ class RealtimeViewerGUI:
         self.pbr_settings['indirect'] = self.indirect_var.get()
         self.pbr_settings['shadow'] = self.shadow_var.get()
         
-        # ✅ 如果任意 PBR 选项被勾选，自动启用 PBR 渲染
+        # ✅ 如果任意 PBR 选项被勾选，自动切换到标准重光照模式
         if any([self.metallic_var.get(), self.indirect_var.get(), self.shadow_var.get()]):
             if not self.enable_pbr:
                 self.enable_pbr = True
-                self.render_mode_var.set("relight")  # 同步更新渲染模式
-                print(f"[RealtimeViewer] ✓ 自动启用 PBR 渲染")
+                self.quality_mode = "standard"
+                self.render_mode_var.set("standard_relight")  # 同步更新渲染模式
+                print(f"[RealtimeViewer] ✓ 自动启用标准重光照模式")
         else:
             # 如果所有选项都未勾选，可以关闭 PBR（可选）
             # self.enable_pbr = False
