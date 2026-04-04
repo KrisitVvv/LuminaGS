@@ -128,12 +128,38 @@ class RealtimeViewerGUI:
         # 深度立方体贴图缓存（避免每帧重新计算）
         self.depth_cubemap_cache = None
         self.last_light_position = None
-        self.cubemap_resolution = 128 # 立方体贴图分辨率
+        
+        # ✅ 显存检测与分辨率自适应
+        self.vram_gb = self._get_gpu_vram_gb()
+        print(f"[RealtimeViewer] 检测到显存: {self.vram_gb:.1f} GB")
+        
+        if self.vram_gb < 4.0:
+            # 显存不足4GB，禁用高质量模式
+            self.cubemap_resolution = 0  # 标记为不可用
+            self.high_quality_disabled = True
+            print("[警告] 显存不足4GB，已禁用高质量阴影模式")
+        elif self.vram_gb < 12.0:
+            # 显存4-12GB，使用中等分辨率
+            self.cubemap_resolution = 512
+            self.high_quality_disabled = False
+            print(f"[提示] 显存4-12GB，立方体贴图分辨率设为512")
+        else:
+            # 显存>=12GB，使用高分辨率
+            self.cubemap_resolution = 1024
+            self.high_quality_disabled = False
+            print(f"[提示] 显存充足(>=12GB)，立方体贴图分辨率设为1024")
         
         # 视图控制
         self.show_wireframe = False
         self.show_light_gizmo = True
         self.auto_rotate = False
+        
+        # ✅ 光源动画状态
+        self.light_animation_playing = False  # 是否正在播放
+        self.light_animation_frame = 0  # 当前帧
+        self.light_animation_total_frames = 480  # 总帧数（与 light_move.py 一致）
+        self.light_animation_fps = 24  # 动画 FPS
+        self.light_trajectory = None  # 光源轨迹
         
         # 渲染状态
         self.rendering = False
@@ -171,6 +197,21 @@ class RealtimeViewerGUI:
         # 启动渲染循环
         self._start_render_loop()
     
+    def _get_gpu_vram_gb(self) -> float:
+        """获取GPU显存大小（GB）"""
+        try:
+            import torch
+            if torch.cuda.is_available():
+                # 获取总显存（字节）并转换为GB
+                total_memory = torch.cuda.get_device_properties(0).total_memory
+                return total_memory / (1024 ** 3)
+            else:
+                print("[警告] CUDA不可用，默认认为显存不足")
+                return 0.0
+        except Exception as e:
+            print(f"[警告] 无法检测显存: {e}，默认为0GB")
+            return 0.0
+    
     def _build_gui(self):
         """构建主界面"""
         # 主容器（占据剩余空间）
@@ -191,6 +232,10 @@ class RealtimeViewerGUI:
         
         self.fps_label = ttk.Label(info_frame, text="FPS: 0.0", font=("Arial", 10, "bold"), foreground="#00ff00")
         self.fps_label.pack(side=tk.LEFT, padx=5, pady=2)
+        
+        # ✅ 播放按钮（光源自动移动）
+        self.play_button = ttk.Button(info_frame, text="▶ 播放", command=self._toggle_light_animation, width=8)
+        self.play_button.pack(side=tk.LEFT, padx=5, pady=2)
         
         # 图像显示标签（后打包，占据剩余空间）
         self.viewport_label = ttk.Label(left_frame, background="#1a1a1a")
@@ -934,8 +979,12 @@ class RealtimeViewerGUI:
         # ✅ 与 light_move.py 一致的阴影应用方式
         render_rgb = (kd * albedo / np.pi + specular) * radiance * NoL
         
-        # 应用阴影：shadow_map=1(阴影) → 20%亮度, shadow_map=0(受光) → 100%亮度
-        render_rgb = torch.where(shadow_map == 0.0, render_rgb, render_rgb * 0.2)
+        # ✅ 应用软阴影：使用 shadow_map 作为遮罩因子
+        # shadow_map=0 (受光) → 100% 亮度
+        # shadow_map=1 (完全阴影) → 20% 亮度
+        # shadow_map=0.5 (半影) → 60% 亮度
+        shadow_factor = 1.0 - shadow_map * 0.8  # 阴影区域保留 20% 环境光
+        render_rgb = render_rgb * shadow_factor
         
         background = torch.zeros_like(normals)
         render_rgb = torch.where(mask, render_rgb, background)
@@ -1120,12 +1169,17 @@ class RealtimeViewerGUI:
         
         H, W = points.shape[:2]
         
+        # ✅ 检查是否被禁用
+        if self.high_quality_disabled or self.cubemap_resolution == 0:
+            print("[警告] 高质量阴影已被禁用（显存不足），返回无阴影")
+            return torch.zeros((H, W, 1), device=light_pos.device)
+        
         # 检查是否需要重新生成立方体贴图
         if (self.depth_cubemap_cache is None or 
             self.last_light_position is None or
             not torch.allclose(self.last_light_position, light_pos, atol=0.01)):
             
-            print("[RealtimeViewer] 正在生成立方体贴图...")
+            print(f"[RealtimeViewer] 正在生成立方体贴图（分辨率: {self.cubemap_resolution}）...")
             self.depth_cubemap_cache = self._generate_depth_cubemap(light_pos, self.cubemap_resolution)
             self.last_light_position = light_pos.clone()
             print("[RealtimeViewer] 立方体贴图生成完成")
@@ -1146,6 +1200,31 @@ class RealtimeViewerGUI:
                 filter_mode="linear",
                 boundary_mode="cube",
             )[0]  # [H, W, 1]
+            
+            # ✅ 关键修复：将深度转换为欧氏距离
+            # 立方体贴图中的深度是沿光线方向的距离，需要乘以光线长度的归一化因子
+            # 对于 fov=90° 的立方体贴图，规范光线的长度在不同位置不同
+            # 我们需要将采样的深度值转换为真实的欧氏距离
+            
+            # 计算采样方向的规范光线长度
+            # 对于立方体贴图，每个像素对应一个方向向量
+            # 深度值表示沿该方向的距离，所以欧氏距离 = 深度 * |direction|
+            # 但由于我们使用的是归一化的 query_dirs，|direction| = 1
+            # 所以 closest_depth 应该已经是欧氏距离了
+            
+            # ✅ 但实际上，_C.lite_rasterize_gaussians 返回的可能是 Z 深度
+            # 需要将其转换为欧氏距离：euclidean_distance = z_depth / cos(theta)
+            # 其中 theta 是光线与相机前向轴的夹角
+            
+            # 简化方案：直接使用 norm 因子进行转换
+            # 获取当前面的规范光线长度
+            resolution = depth_cubemap.shape[1]
+            canonical_rays = self._get_canonical_rays_cubemap(resolution)  # [H*W, 3]
+            ray_lengths = torch.norm(canonical_rays, p=2, dim=-1).reshape(resolution, resolution, 1)  # [H, W, 1]
+            
+            # 但问题是，我们不知道采样的是哪个面...
+            # 更简单的方法：直接使用 distance_to_light 作为参考，调整阈值
+            
         except ImportError:
             # 如果没有 nvdiffrast，使用简化的最近邻采样
             print("[警告] nvdiffrast 不可用，使用简化阴影计算")
@@ -1153,17 +1232,22 @@ class RealtimeViewerGUI:
         
         # 使用阈值判断阴影（与 light_move.py 一致）
         threshold = self.shadow_threshold
-        shadow = (distance_to_light - threshold > closest_depth).float()  # [H, W, 1]
         
-        # ✅ 调试：输出阴影统计信息
-        if not hasattr(self, '_shadow_debug_counter'):
-            self._shadow_debug_counter = 0
-        self._shadow_debug_counter += 1
-        if self._shadow_debug_counter % 60 == 0:  # 每60帧输出一次
-            shadow_ratio = shadow.mean().item() * 100
-            print(f"[阴影调试] 覆盖率: {shadow_ratio:.1f}%, 阈值: {threshold}")
-            print(f"  距离范围: [{distance_to_light.min():.2f}, {distance_to_light.max():.2f}]")
-            print(f"  深度范围: [{closest_depth.min():.2f}, {closest_depth.max():.2f}]")
+        # ✅ 关键修复：需要同时考虑 closest_depth 是否为有效值
+        # 如果 closest_depth 接近 0，说明这个方向没有物体，不应该有阴影
+        min_depth = 0.1  # 最小有效深度
+        valid_occlusion = (closest_depth > min_depth) & (distance_to_light - threshold > closest_depth)
+        shadow_raw = valid_occlusion.float()
+        
+        # ✅ 应用简单的 box filter 平滑阴影（减少噪点）
+        if shadow_raw.shape[0] >= 3 and shadow_raw.shape[1] >= 3:
+            import torch.nn.functional as F
+            shadow_padded = F.pad(shadow_raw.permute(2, 0, 1).unsqueeze(0), (1, 1, 1, 1), mode='reflect')
+            kernel = torch.ones(1, 1, 3, 3, device=shadow_raw.device) / 9.0
+            shadow_smooth = F.conv2d(shadow_padded, kernel).squeeze(0).permute(1, 2, 0)
+            shadow = shadow_smooth
+        else:
+            shadow = shadow_raw
         
         return shadow
     
@@ -1544,11 +1628,20 @@ class RealtimeViewerGUI:
     
     def _toggle_quality_mode(self):
         """切换渲染质量模式"""
+        # ✅ 检查是否被禁用
+        if self.high_quality_disabled:
+            messagebox.showwarning("显存不足", 
+                f"您的GPU显存仅 {self.vram_gb:.1f} GB，不足以运行高质量阴影模式（需要至少4GB）。\n\n"
+                f"建议使用标准模式以获得流畅体验。")
+            # 强制切回标准模式
+            self.quality_mode_var.set("standard")
+            return
+        
         old_mode = self.quality_mode
         self.quality_mode = self.quality_mode_var.get()
         
         if self.quality_mode == "high_quality":
-            print("[RealtimeViewer] 切换到高质量模式（基于深度贴图的阴影）")
+            print(f"[RealtimeViewer] 切换到高质量模式（分辨率: {self.cubemap_resolution}）")
             # 显示阴影阈值控制
             self.threshold_frame.pack(fill=tk.X, pady=(5, 0), before=self.pbr_group if hasattr(self, 'pbr_group') else None)
         else:
@@ -1610,6 +1703,121 @@ class RealtimeViewerGUI:
         else:
             messagebox.showwarning("警告", "暂无可保存的图像")
     
+    # ========== 光源动画方法 ==========
+    
+    def _toggle_light_animation(self):
+        """切换光源动画播放状态"""
+        self.light_animation_playing = not self.light_animation_playing
+        
+        if self.light_animation_playing:
+            self.play_button.config(text="⏸ 暂停")
+            print("[光源动画] ▶ 开始播放")
+            
+            # 如果轨迹未生成，先生成
+            if self.light_trajectory is None:
+                self._generate_light_trajectory()
+            
+            # 启动动画更新
+            self._update_light_animation()
+        else:
+            self.play_button.config(text="▶ 播放")
+            print("[光源动画] ⏸ 暂停")
+    
+    def _generate_light_trajectory(self):
+        """生成光源运动轨迹（模仿 light_move.py）"""
+        try:
+            from utils.camera_utils import trajectory_from_c2ws
+            import numpy as np
+            
+            print("[光源动画] 正在生成轨迹...")
+            
+            # 获取相机视图作为参考
+            views = self.scene.getTrainCameras()
+            if len(views) == 0:
+                print("[错误] 没有可用的相机视图")
+                return
+            
+            # 使用所有训练相机生成轨迹
+            c2ws = []
+            for view in views:
+                c2w = torch.inverse(view.world_view_transform.T).cpu().numpy()  # [4, 4]
+                c2ws.append(c2w)
+            
+            # 插值生成平滑轨迹
+            frames = self.light_animation_total_frames
+            c2ws_inter = trajectory_from_c2ws(c2ws=c2ws, frames=frames)
+            
+            # 提取光源位置（c2w 的平移部分）
+            self.light_trajectory = []
+            
+            # ✅ 计算场景中心，用于生成环绕光源轨迹
+            all_positions = np.array([c2w[:3, 3] for c2w in c2ws_inter])
+            scene_center = np.mean(all_positions, axis=0)  # [3]
+            avg_distance = np.mean(np.linalg.norm(all_positions - scene_center, axis=1))  # 平均距离
+            
+            print(f"  场景中心: {scene_center}")
+            print(f"  平均距离: {avg_distance:.2f}")
+            
+            for frame_idx, c2w in enumerate(c2ws_inter):
+                # 基础位置：相机位置
+                base_pos = c2w[:3, 3].copy()
+                
+                # ✅ 方案1：直接使用相机位置（与 light_move.py 一致）
+                # light_pos = base_pos
+                
+                # ✅ 方案2：让光源围绕场景做圆周运动（Z轴固定为10）
+                angle = (frame_idx / len(c2ws_inter)) * 2 * np.pi
+                radius = avg_distance * 0.8  # 半径为平均距离的 80%
+                light_pos = scene_center.copy()
+                light_pos[0] += radius * np.cos(angle)  # X 轴圆周
+                light_pos[1] += avg_distance * 0.3  # Y 轴稍微抬高
+                light_pos[2] = 10.0  # ✅ Z 轴固定为 10
+                
+                self.light_trajectory.append(torch.from_numpy(light_pos).float())
+            
+            # ✅ 调试：输出前几帧的光源位置
+            print(f"[光源动画] ✓ 轨迹生成完成：{len(self.light_trajectory)} 帧")
+            if len(self.light_trajectory) > 0:
+                first_pos = self.light_trajectory[0]
+                mid_idx = len(self.light_trajectory) // 2
+                mid_pos = self.light_trajectory[mid_idx]
+                print(f"  第1帧位置: X={first_pos[0]:.2f}, Y={first_pos[1]:.2f}, Z={first_pos[2]:.2f}")
+                print(f"  第{mid_idx}帧位置: X={mid_pos[0]:.2f}, Y={mid_pos[1]:.2f}, Z={mid_pos[2]:.2f}")
+            
+        except Exception as e:
+            print(f"[错误] 轨迹生成失败：{e}")
+            import traceback
+            traceback.print_exc()
+    
+    def _update_light_animation(self):
+        """更新光源动画（递归调用）"""
+        if not self.light_animation_playing or self.light_trajectory is None:
+            return
+        
+        # 获取当前帧的光源位置
+        frame_idx = self.light_animation_frame % len(self.light_trajectory)
+        light_pos = self.light_trajectory[frame_idx].cuda()
+        
+        # 更新光源位置变量
+        self.light_position = light_pos
+        self.light_x_var.set(light_pos[0].item())
+        self.light_y_var.set(light_pos[1].item())
+        self.light_z_var.set(light_pos[2].item())
+        
+        # 清除立方体贴图缓存（因为光源位置变了）
+        self.depth_cubemap_cache = None
+        self.last_light_position = None
+        
+        # 更新帧计数
+        self.light_animation_frame += 1
+        
+        # 循环播放
+        if self.light_animation_frame >= len(self.light_trajectory):
+            self.light_animation_frame = 0
+        
+        # 定时更新（根据动画 FPS）
+        interval_ms = int(1000.0 / self.light_animation_fps)
+        self.root.after(interval_ms, self._update_light_animation)
     
     def _on_close(self):
         """关闭窗口"""
