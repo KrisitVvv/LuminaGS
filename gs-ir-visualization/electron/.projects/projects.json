@@ -1,9 +1,9 @@
 [
   {
     "projectId": "project_20260314_002_20260314_0025_jvi",
-    "name": "project_20260314_0025",
+    "name": "Counter",
     "outputPath": "E:\\GraduationProject\\Testoutput",
-    "lastModified": "2026-03-19T02:44:19.615Z",
+    "lastModified": "2026-04-04T08:20:22.565Z",
     "status": "completed",
     "currentIteration": 40000,
     "configFile": "E:\\GraduationProject\\Testoutput\\.luminags\\project_20260314_002_20260314_0025_jvi.json",
@@ -23,12 +23,14 @@
   },
   {
     "projectId": "project_20260403_233_20260403_2336_c56",
-    "name": "project_20260403_2336",
+    "name": "Garden",
     "outputPath": "E:\\GraduationProject\\output",
-    "lastModified": "2026-04-03T15:42:29.447Z",
-    "status": "training",
-    "currentIteration": 3200,
+    "lastModified": "2026-04-04T08:19:49.960Z",
+    "status": "completed",
+    "currentIteration": 40000,
     "configFile": "E:\\GraduationProject\\output\\.luminags\\project_20260403_233_20260403_2336_c56.json",
-    "stage": "stage1"
+    "stage": "stage2",
+    "thumbnailPath": "E:\\GraduationProject\\output\\.luminags\\render_3800.png",
+    "sourcePath": "E:\\GraduationProject\\tools\\GS-IR-main\\datasets\\nerf_real_360\\garden"
   }
 ]

@@ -1470,16 +1470,16 @@ ipcMain.handle('spawn-python-process', async (event, config) => {
         }, 500); // 每 500ms 检查一次
       }
       
-      // 超时保护：60 秒后自动认为超时（大模型可能需要更长时间）
+      // 超时保护：120 秒后自动认为超时（大模型可能需要更长时间）
       const timeoutHandle = setTimeout(() => {
         if (!isReady) {
-          console.log('[IPC] ⏰ 等待超时（60 秒）');
+          console.log('[IPC] ⏰ 等待超时（120 秒）');
           isTimeout = true;
           isReady = true; // 标记为就绪，但会抛出错误
           resolve({ ready: false, timeout: true });
           if (signalCheckInterval) clearInterval(signalCheckInterval);
         }
-      }, 60000); // ✅ 增加到 60 秒
+      }, 120000); // ✅ 增加到 120 秒（2分钟）
       
       // 监听 stdout，检测加载完成信号（作为信号文件的备用方案）
       childProcess.stdout.on('data', (data) => {
@@ -1531,7 +1531,7 @@ ipcMain.handle('spawn-python-process', async (event, config) => {
     
     // ✅ 检查是否超时
     if (!readyResult.ready) {
-      console.error('[IPC] ❌ 加载超时（40 秒），准备终止 Python 进程');
+      console.error('[IPC] ❌ 加载超时（120 秒），准备终止 Python 进程');
       
       // 终止 Python 进程
       try {
@@ -1541,7 +1541,7 @@ ipcMain.handle('spawn-python-process', async (event, config) => {
         console.error('[IPC] 终止进程失败:', killError.message);
       }
       
-      throw new Error('Python 程序加载超时（60 秒），请检查程序是否正常或尝试重新创建项目');
+      throw new Error('Python 程序加载超时（120 秒），请检查程序是否正常或尝试重新创建项目');
     }
     
     return {

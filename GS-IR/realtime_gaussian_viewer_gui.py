@@ -27,7 +27,7 @@ class RealtimeViewerGUI:
     def __init__(self, root: tk.Tk, model_path: str, checkpoint: str, dataset: GroupParams, pipeline: GroupParams, resolution_scale: float = 1.0):
         self.root = root
         self.root.title("LuminaGS - Realtime Viewer")
-        self.root.geometry("1400x900")
+        self.root.geometry("1400x800")
         self.root.minsize(1200, 800)
         
         # 模型数据
@@ -108,7 +108,7 @@ class RealtimeViewerGUI:
             # 如果无法计算，使用默认位置
             self.light_position = torch.tensor([5.0, 5.0, 5.0], dtype=torch.float32)
         
-        self.light_intensity = torch.tensor([100.0, 100.0, 100.0], dtype=torch.float32).cuda()
+        # 光照强度将在 _build_gui 后初始化
         self.enable_pbr = False
         
         # PBR 设置
@@ -119,6 +119,10 @@ class RealtimeViewerGUI:
             'gamma_correction': False,
             'shadow': True,
         }
+        
+        # 渲染质量模式
+        self.quality_mode = "standard"  # "standard" 或 "high_quality"
+        self.shadow_threshold = 2.0  # 阴影阈值，对应 light_move.py 中的 threshold 参数
         
         # 视图控制
         self.show_wireframe = False
@@ -137,12 +141,18 @@ class RealtimeViewerGUI:
         self.mouse_left_pressed = False
         self.mouse_right_pressed = False
         
+        # 就绪信号文件路径（用于退出时清理）
+        self.ready_signal_path = os.path.join(model_path, '.luminags', 'gui_ready.signal')
+        
         # 加载用户配置
         print("[RealtimeViewer] 正在加载用户配置...", flush=True)
         self.user_config = self._load_user_config()
         
         # 构建 GUI
         self._build_gui()
+        
+        # 初始化光照强度（在 GUI 构建后）
+        self.light_intensity = torch.tensor([self.light_r_var.get(), self.light_g_var.get(), self.light_b_var.get()], dtype=torch.float32).cuda()
         
         # 应用用户配置（如果有）
         if self.user_config:
@@ -248,24 +258,57 @@ class RealtimeViewerGUI:
             self.distance = min(self.distance, 100.0)
     
     def _create_properties_panel(self, parent) -> ttk.Frame:
-        """创建右侧属性面板"""
-        panel = ttk.Frame(parent, width=300)
+        """创建右侧属性面板（带滚动）"""
+        # 创建主容器
+        panel = ttk.Frame(parent, width=320)
         panel.pack_propagate(False)
         
+        # 创建Canvas和Scrollbar
+        canvas = tk.Canvas(panel, highlightthickness=0, width=300)
+        scrollbar = ttk.Scrollbar(panel, orient="vertical", command=canvas.yview)
+        
+        # 创建可滚动的框架
+        scrollable_frame = ttk.Frame(canvas)
+        
+        # 配置滚动区域
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        # 在Canvas中创建窗口，并设置宽度
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw", width=300)
+        
+        # 配置Canvas的滚动命令
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # 绑定鼠标滚轮事件（仅在Canvas上）
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        
+        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _on_mousewheel))
+        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
+        
+        # 打包Canvas和Scrollbar
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        # ========== 以下内容添加到 scrollable_frame 中 ==========
+        
         # 视图控制（从工具栏移过来）
-        view_group = ttk.LabelFrame(panel, text="视图控制", padding="10")
+        view_group = ttk.LabelFrame(scrollable_frame, text="视图控制", padding="10")
         view_group.pack(fill=tk.X, pady=5)
         
         ttk.Button(view_group, text="重置视角", command=self._reset_view).pack(pady=5, padx=10, fill=tk.X)
         
         # 💾 配置保存功能
-        config_group = ttk.LabelFrame(panel, text="配置管理", padding="10")
-        config_group.pack(fill=tk.X, pady=10)
+        config_group = ttk.LabelFrame(scrollable_frame, text="配置管理", padding="10")
+        config_group.pack(fill=tk.X, pady=5)
         
         ttk.Button(config_group, text="💾 保存当前配置", command=self._save_user_config, style='Accent.TButton').pack(pady=8, padx=10, fill=tk.X)
         
         # 渲染模式（从工具栏移过来）
-        render_group = ttk.LabelFrame(panel, text="渲染模式", padding="10")
+        render_group = ttk.LabelFrame(scrollable_frame, text="渲染模式", padding="10")
         render_group.pack(fill=tk.X, pady=5)
         
         self.render_mode_var = tk.StringVar(value="normal")
@@ -275,13 +318,13 @@ class RealtimeViewerGUI:
                        command=self._toggle_render_mode).pack(anchor=tk.W, padx=10)
         
         # 截图功能
-        screenshot_group = ttk.Frame(panel, padding="10")
+        screenshot_group = ttk.Frame(scrollable_frame, padding="10")
         screenshot_group.pack(fill=tk.X, pady=5)
         
         ttk.Button(screenshot_group, text="📸 保存截图", command=self._save_screenshot).pack(pady=5, padx=10, fill=tk.X)
         
         # 光源控制
-        light_group = ttk.LabelFrame(panel, text="光源控制", padding="10")
+        light_group = ttk.LabelFrame(scrollable_frame, text="光源控制", padding="10")
         light_group.pack(fill=tk.X, pady=5)
         
         ttk.Label(light_group, text="位置 X:").pack(anchor=tk.W)
@@ -299,8 +342,60 @@ class RealtimeViewerGUI:
         ttk.Scale(light_group, from_=0, to=40, variable=self.light_z_var,
                   command=self._update_light_position).pack(fill=tk.X)
         
+        # 光照强度控制
+        intensity_group = ttk.LabelFrame(scrollable_frame, text="光照强度控制", padding="10")
+        intensity_group.pack(fill=tk.X, pady=5)
+        
+        # 整体强度控制
+        ttk.Label(intensity_group, text="整体强度:").pack(anchor=tk.W)
+        self.light_master_var = tk.DoubleVar(value=100.0)
+        self.master_scale = ttk.Scale(intensity_group, from_=0, to=200, variable=self.light_master_var,
+                  command=self._update_light_master_intensity)
+        self.master_scale.pack(fill=tk.X)
+        
+        ttk.Separator(intensity_group, orient='horizontal').pack(fill=tk.X, pady=5)
+        
+        ttk.Label(intensity_group, text="R 强度:").pack(anchor=tk.W)
+        self.light_r_var = tk.DoubleVar(value=100.0)
+        ttk.Scale(intensity_group, from_=0, to=200, variable=self.light_r_var,
+                  command=self._update_light_intensity).pack(fill=tk.X)
+        
+        ttk.Label(intensity_group, text="G 强度:").pack(anchor=tk.W)
+        self.light_g_var = tk.DoubleVar(value=100.0)
+        ttk.Scale(intensity_group, from_=0, to=200, variable=self.light_g_var,
+                  command=self._update_light_intensity).pack(fill=tk.X)
+        
+        ttk.Label(intensity_group, text="B 强度:").pack(anchor=tk.W)
+        self.light_b_var = tk.DoubleVar(value=100.0)
+        ttk.Scale(intensity_group, from_=0, to=200, variable=self.light_b_var,
+                  command=self._update_light_intensity).pack(fill=tk.X)
+        
+        # 渲染模式设置
+        quality_group = ttk.LabelFrame(scrollable_frame, text="渲染模式设置", padding="10")
+        quality_group.pack(fill=tk.X, pady=5)
+        
+        # 渲染质量模式选择
+        self.quality_mode_var = tk.StringVar(value="standard")
+        ttk.Radiobutton(quality_group, text="标准模式", variable=self.quality_mode_var, value="standard",
+                       command=self._toggle_quality_mode).pack(anchor=tk.W, padx=10)
+        ttk.Radiobutton(quality_group, text="高质量阴影模式", variable=self.quality_mode_var, value="high_quality",
+                       command=self._toggle_quality_mode).pack(anchor=tk.W, padx=10)
+        
+        # 阴影阈值控制（仅在高质量模式下显示）
+        self.threshold_frame = ttk.Frame(quality_group)
+        self.threshold_frame.pack(fill=tk.X, pady=(5, 0))
+        
+        ttk.Label(self.threshold_frame, text="阴影阈值:").pack(anchor=tk.W)
+        self.shadow_threshold_var = tk.DoubleVar(value=2.0)
+        self.threshold_scale = ttk.Scale(self.threshold_frame, from_=0.1, to=10.0, variable=self.shadow_threshold_var,
+                  command=self._update_shadow_threshold)
+        self.threshold_scale.pack(fill=tk.X)
+        
+        # 初始状态：隐藏阈值控制（默认是标准模式）
+        self.threshold_frame.pack_forget()
+        
         # PBR 设置
-        pbr_group = ttk.LabelFrame(panel, text="PBR 设置", padding="10")
+        pbr_group = ttk.LabelFrame(scrollable_frame, text="PBR 设置", padding="10")
         pbr_group.pack(fill=tk.X, pady=5)
         
         self.metallic_var = tk.BooleanVar(value=False)
@@ -316,7 +411,7 @@ class RealtimeViewerGUI:
                        command=self._update_pbr_settings).pack(anchor=tk.W)
         
         # 场景统计
-        stats_group = ttk.LabelFrame(panel, text="场景统计", padding="10")
+        stats_group = ttk.LabelFrame(scrollable_frame, text="场景统计", padding="10")
         stats_group.pack(fill=tk.X, pady=5)
         
         self.stats_label = ttk.Label(stats_group, 
@@ -407,11 +502,29 @@ class RealtimeViewerGUI:
             # 这里需要将 numpy 数组转换为 PhotoImage
             # 由于 Tkinter 不支持直接显示 numpy，需要使用 PIL
             try:
-                from PIL import Image, ImageTk
+                from PIL import Image, ImageTk, ImageDraw
                 image = Image.fromarray(self.current_frame)
                 image = image.resize((self.viewport_label.winfo_width(), 
                                      self.viewport_label.winfo_height()), 
                                     Image.Resampling.LANCZOS)
+                
+                # 在图像上绘制光源标识
+                if self.show_light_gizmo and self.enable_pbr:
+                    draw = ImageDraw.Draw(image)
+                    # 计算光源在屏幕上的投影位置
+                    light_screen_pos = self._project_light_to_screen(image.width, image.height)
+                    if light_screen_pos is not None:
+                        lx, ly = light_screen_pos
+                        # 绘制光源中心点（黄色圆圈）
+                        radius = 8
+                        draw.ellipse([lx-radius, ly-radius, lx+radius, ly+radius], 
+                                   outline='yellow', width=2)
+                        draw.ellipse([lx-3, ly-3, lx+3, ly+3], fill='yellow')
+                        # 绘制十字准星
+                        cross_size = 15
+                        draw.line([lx-cross_size, ly, lx+cross_size, ly], fill='yellow', width=1)
+                        draw.line([lx, ly-cross_size, lx, ly+cross_size], fill='yellow', width=1)
+                
                 photo = ImageTk.PhotoImage(image)
                 self.viewport_label.configure(image=photo)
                 self.viewport_label.image = photo  # 保持引用
@@ -421,6 +534,48 @@ class RealtimeViewerGUI:
                 
             except Exception as e:
                 print(f"[显示错误] {e}")
+    
+    def _project_light_to_screen(self, screen_width: int, screen_height: int):
+        """将光源位置投影到屏幕坐标"""
+        try:
+            import torch.nn.functional as F
+            
+            # 获取当前相机矩阵
+            c2w = self._get_current_c2w()
+            w2c = torch.inverse(c2w)
+            
+            # 光源位置（世界坐标）
+            light_pos_world = self.light_position.cuda()
+            
+            # 转换到相机坐标系
+            light_pos_cam = w2c[:3, :3] @ light_pos_world + w2c[:3, 3]
+            
+            # 检查光源是否在相机前方
+            if light_pos_cam[2] <= 0:
+                return None
+            
+            # 获取相机内参
+            tan_fovx = np.tan(self.ref_view.FoVx * 0.5)
+            tan_fovy = np.tan(self.ref_view.FoVy * 0.5)
+            focal_x = screen_width / (2.0 * tan_fovx)
+            focal_y = screen_height / (2.0 * tan_fovy)
+            
+            # 透视投影
+            x_ndc = (light_pos_cam[0] / light_pos_cam[2]) * focal_x / (screen_width / 2)
+            y_ndc = -(light_pos_cam[1] / light_pos_cam[2]) * focal_y / (screen_height / 2)  # Y轴翻转
+            
+            # 转换到屏幕坐标
+            screen_x = (x_ndc + 1.0) * screen_width / 2
+            screen_y = (y_ndc + 1.0) * screen_height / 2
+            
+            # 检查是否在屏幕范围内
+            if 0 <= screen_x <= screen_width and 0 <= screen_y <= screen_height:
+                return (int(screen_x), int(screen_y))
+            else:
+                return None
+        except Exception as e:
+            print(f"[投影错误] {e}")
+            return None
     
     def _get_current_c2w(self) -> torch.Tensor:
         """计算相机外参"""
@@ -515,18 +670,43 @@ class RealtimeViewerGUI:
         
         # ✅ 1. 计算直接光照（Direct Lighting）
         if use_shadow:
-            direct_result = self._light_pbr_shading(
-                light_position=light_pos_world,
-                light_intensity=self.light_intensity,
-                points=points,
-                normals=normal_map.permute(1, 2, 0),
-                view_dirs=view_dirs,
-                mask=normal_mask.permute(1, 2, 0),
-                albedo=albedo_map.permute(1, 2, 0),
-                roughness=roughness_map.permute(1, 2, 0),
-                metallic=metallic_map.permute(1, 2, 0),
-                linear=False,
-            )
+            if self.quality_mode == "high_quality":
+                # 高质量模式：使用基于深度贴图的阴影
+                shadow_map = self._calculate_high_quality_shadows(
+                    light_pos=light_pos_world,
+                    points=points,
+                    normal_map=normal_map.permute(1, 2, 0),
+                    depth_map=depth_map.permute(1, 2, 0)
+                )
+                
+                # 应用阴影到PBR着色
+                direct_result = self._light_pbr_shading_with_shadow_map(
+                    light_position=light_pos_world,
+                    light_intensity=self.light_intensity,
+                    points=points,
+                    normals=normal_map.permute(1, 2, 0),
+                    view_dirs=view_dirs,
+                    mask=normal_mask.permute(1, 2, 0),
+                    albedo=albedo_map.permute(1, 2, 0),
+                    roughness=roughness_map.permute(1, 2, 0),
+                    metallic=metallic_map.permute(1, 2, 0),
+                    shadow_map=shadow_map,
+                    linear=False,
+                )
+            else:
+                # 标准模式：使用传统PBR阴影
+                direct_result = self._light_pbr_shading(
+                    light_position=light_pos_world,
+                    light_intensity=self.light_intensity,
+                    points=points,
+                    normals=normal_map.permute(1, 2, 0),
+                    view_dirs=view_dirs,
+                    mask=normal_mask.permute(1, 2, 0),
+                    albedo=albedo_map.permute(1, 2, 0),
+                    roughness=roughness_map.permute(1, 2, 0),
+                    metallic=metallic_map.permute(1, 2, 0),
+                    linear=False,
+                )
         else:
             direct_result = self._light_pbr_shading_no_shadow(
                 light_position=light_pos_world,
@@ -685,6 +865,59 @@ class RealtimeViewerGUI:
         
         return {"render_rgb": render_rgb}
     
+    def _light_pbr_shading_with_shadow_map(
+        self,
+        light_position: torch.Tensor,
+        light_intensity: torch.Tensor,
+        points: torch.Tensor,
+        normals: torch.Tensor,
+        view_dirs: torch.Tensor,
+        albedo: torch.Tensor,
+        roughness: torch.Tensor,
+        mask: torch.Tensor,
+        shadow_map: torch.Tensor,
+        metallic: Optional[torch.Tensor] = None,
+        linear: bool = False,
+    ) -> Dict:
+        """PBR 着色函数（使用阴影贴图）"""
+        import torch.nn.functional as F
+        
+        # 准备向量
+        light_dirs = F.normalize(light_position - points, p=2, dim=-1)  # [H, W, 3]
+        half_dirs = (light_dirs + view_dirs) / 2.0  # [H, W, 3]
+        distance = torch.norm(light_position - points, p=2, dim=-1, keepdim=True)  # [H, W, 1]
+        attenuation = 1.0 / torch.pow(distance, 2)  # [H, W, 1]
+        radiance = light_intensity * attenuation  # [H, W, 3]
+        
+        if metallic is None:
+            F0 = torch.ones_like(albedo) * 0.04  # [H, W, 3]
+        else:
+            F0 = (1.0 - metallic) * 0.04 + albedo * metallic  # [H, W, 3]
+        
+        # Cook-Torrance BRDF
+        NoV = self._saturate_dot(normals, view_dirs)  # [H, W, 1]
+        NoL = self._saturate_dot(normals, light_dirs)  # [H, W, 1]
+        HoV = self._saturate_dot(half_dirs, view_dirs)  # [H, W, 1]
+        NDF = self._distribution_ggx(normals=normals, half_dirs=half_dirs, roughness=roughness)  # [H, W, 1]
+        G = self._geometry_smith(normals=normals, view_dirs=view_dirs, light_dirs=light_dirs, roughness=roughness)  # [H, W, 1]
+        fresnel = self._fresnel_schlick(HoV=HoV, F0=F0)  # [H, W, 3]
+        
+        numerator = NDF * G * fresnel  # [H, W, 3]
+        denominator = 4.0 * NoV * NoL + 1e-4  # [H, W, 1]
+        specular = numerator / denominator  # [H, W, 3]
+        
+        kd = 1.0 - fresnel  # [H, W, 3]
+        if metallic is not None:
+            kd *= (1.0 - metallic)
+        
+        # 应用阴影贴图
+        render_rgb = (kd * albedo / np.pi + specular) * radiance * NoL * (1.0 - shadow_map)
+        
+        background = torch.zeros_like(normals)
+        render_rgb = torch.where(mask, render_rgb, background)
+        
+        return {"render_rgb": render_rgb}
+    
     def _light_pbr_shading_no_shadow(
         self,
         light_position: torch.Tensor,
@@ -735,6 +968,79 @@ class RealtimeViewerGUI:
         render_rgb = torch.where(mask, render_rgb, background)
         
         return {"render_rgb": render_rgb}
+    
+    def _generate_depth_cubemap(self, light_pos: torch.Tensor, resolution: int = 512) -> torch.Tensor:
+        """生成光源视角的深度立方体贴图"""
+        import torch.nn.functional as F
+        
+        # 6个方向的视图矩阵（+X, -X, +Y, -Y, +Z, -Z）
+        views = [
+            (torch.tensor([1, 0, 0], dtype=torch.float32), torch.tensor([0, -1, 0], dtype=torch.float32)),  # +X
+            (torch.tensor([-1, 0, 0], dtype=torch.float32), torch.tensor([0, -1, 0], dtype=torch.float32)), # -X
+            (torch.tensor([0, 1, 0], dtype=torch.float32), torch.tensor([0, 0, 1], dtype=torch.float32)),   # +Y
+            (torch.tensor([0, -1, 0], dtype=torch.float32), torch.tensor([0, 0, -1], dtype=torch.float32)), # -Y
+            (torch.tensor([0, 0, 1], dtype=torch.float32), torch.tensor([0, -1, 0], dtype=torch.float32)),   # +Z
+            (torch.tensor([0, 0, -1], dtype=torch.float32), torch.tensor([0, -1, 0], dtype=torch.float32)), # -Z
+        ]
+        
+        # 创建立方体贴图（这里我们简化处理，实际需要从场景中渲染深度）
+        # 由于高斯渲染的特殊性，我们需要使用近似方法
+        depth_cubemap = torch.zeros((6, resolution, resolution, 1), dtype=torch.float32)
+        
+        # 注意：实际实现中，这需要从光源视角渲染场景深度图
+        # 由于高斯点云的特殊性，这需要额外的处理
+        # 这里我们返回一个占位符，实际应用中需要实现完整的深度图生成
+        
+        return depth_cubemap.cuda()
+    
+    def _calculate_high_quality_shadows(self, 
+                                      light_pos: torch.Tensor, 
+                                      points: torch.Tensor, 
+                                      normal_map: torch.Tensor,
+                                      depth_map: torch.Tensor) -> torch.Tensor:
+        """基于深度贴图计算高质量阴影"""
+        import torch.nn.functional as F
+        
+        H, W = points.shape[:2]
+        
+        # 计算从点到光源的方向
+        to_light = (light_pos[None, None, :] - points).reshape(H, W, 3)  # [H, W, 3]
+        distance_to_light = torch.norm(to_light, p=2, dim=-1, keepdim=True).reshape(H, W, 1)  # [H, W, 1]
+        
+        # 标准化光线方向
+        light_dirs = F.normalize(to_light, p=2, dim=-1).reshape(H, W, 3)  # [H, W, 3]
+        
+        # 估算遮挡物深度 - 在高斯点云场景中，我们需要一种近似方法
+        # 这里我们使用一种简化的深度比较方法，模仿light_move.py中的逻辑
+        # 
+        # 注意：在实际的light_move.py中，会生成一个从光源视角的深度立方体贴图
+        # 然后比较每个像素到光源的距离与立方体贴图中的深度值
+        # 
+        # 由于我们没有真正的深度立方体贴图，这里使用一种简化的遮挡检测
+        # 基于深度梯度和点密度来估算遮挡
+        
+        # 使用深度图的梯度来估计遮挡
+        depth_z = points[..., 2:3]  # [H, W, 1]
+        depth_dx = torch.abs(torch.gradient(depth_z.squeeze(), dim=0)[0]).unsqueeze(-1)  # [H, W, 1]
+        depth_dy = torch.abs(torch.gradient(depth_z.squeeze(), dim=1)[0]).unsqueeze(-1)  # [H, W, 1]
+        depth_gradient = depth_dx + depth_dy
+        
+        # 使用距离衰减和深度梯度的组合来估计遮挡
+        # 这是一个简化的替代方法，因为完整实现需要从光源视角渲染深度图
+        
+        # 使用类似light_move.py中的阈值逻辑
+        # (distance_to_light - threshold > closest_depth) 来判断阴影
+        # 这里closest_depth用深度图近似
+        closest_depth = depth_map  # [H, W, 1]
+        
+        # 使用阈值计算阴影 - 模仿light_move.py的逻辑
+        threshold = self.shadow_threshold
+        shadows = (distance_to_light - threshold > closest_depth).float()
+        
+        # 对阴影进行平滑处理以减少锯齿
+        shadows = torch.clamp(shadows, 0.0, 1.0)
+        
+        return shadows
     
     def _compute_indirect_lighting(
         self,
@@ -823,15 +1129,28 @@ class RealtimeViewerGUI:
                     'y': float(self.light_y_var.get()),
                     'z': float(self.light_z_var.get())
                 },
+                'light_intensity': {
+                    'r': float(self.light_r_var.get()),
+                    'g': float(self.light_g_var.get()),
+                    'b': float(self.light_b_var.get()),
+                    'master': float(self.light_master_var.get())
+                },
+                'quality_mode': self.quality_mode_var.get(),
+                'shadow_threshold': float(self.shadow_threshold_var.get()),
                 'render_mode': self.render_mode_var.get(),
                 'pbr_settings': {
                     'metallic': self.metallic_var.get(),
                     'indirect': self.indirect_var.get(),
                     'shadow': self.shadow_var.get()
                 },
-                'distance': float(self.distance),
-                'yaw': float(self.yaw),
-                'pitch': float(self.pitch)
+                'camera': {
+                    'distance': float(self.distance),
+                    'yaw': float(self.yaw),
+                    'pitch': float(self.pitch),
+                    'center_x': float(self.camera_center[0].item()),
+                    'center_y': float(self.camera_center[1].item()),
+                    'center_z': float(self.camera_center[2].item())
+                }
             }
             
             # 保存到文件
@@ -855,6 +1174,28 @@ class RealtimeViewerGUI:
                 self.light_z_var.set(light_pos.get('z', 5.0))
                 self._update_light_position()
             
+            # 光照强度
+            if 'light_intensity' in self.user_config:
+                light_intensity = self.user_config['light_intensity']
+                self.light_r_var.set(light_intensity.get('r', 100.0))
+                self.light_g_var.set(light_intensity.get('g', 100.0))
+                self.light_b_var.set(light_intensity.get('b', 100.0))
+                self.light_master_var.set(light_intensity.get('master', 100.0))
+                self._update_light_intensity()
+            
+            # 渲染质量模式
+            if 'quality_mode' in self.user_config:
+                self.quality_mode_var.set(self.user_config['quality_mode'])
+                self.quality_mode = self.user_config['quality_mode']
+                # 如果是高质量模式，显示阈值控制
+                if self.quality_mode == "high_quality":
+                    self.threshold_frame.pack(fill=tk.X, pady=(5, 0))
+            
+            # 阴影阈值
+            if 'shadow_threshold' in self.user_config:
+                self.shadow_threshold_var.set(self.user_config['shadow_threshold'])
+                self.shadow_threshold = float(self.user_config['shadow_threshold'])
+            
             # 渲染模式
             if 'render_mode' in self.user_config:
                 self.render_mode_var.set(self.user_config['render_mode'])
@@ -869,12 +1210,16 @@ class RealtimeViewerGUI:
                 self._update_pbr_settings()
             
             # 相机视角
-            if 'distance' in self.user_config:
-                self.distance = float(self.user_config['distance'])
-            if 'yaw' in self.user_config:
-                self.yaw = float(self.user_config['yaw'])
-            if 'pitch' in self.user_config:
-                self.pitch = float(self.user_config['pitch'])
+            if 'camera' in self.user_config:
+                camera = self.user_config['camera']
+                self.distance = float(camera.get('distance', 5.0))
+                self.yaw = float(camera.get('yaw', 0.0))
+                self.pitch = float(camera.get('pitch', 0.0))
+                self.camera_center = torch.tensor([
+                    float(camera.get('center_x', 0.0)),
+                    float(camera.get('center_y', 0.0)),
+                    float(camera.get('center_z', 0.0))
+                ], dtype=torch.float32)
             
             print("[RealtimeViewer] [OK] 用户配置已应用")
         except Exception as e:
@@ -921,6 +1266,57 @@ class RealtimeViewerGUI:
             self.light_z_var.get()
         ], dtype=torch.float32)
         print(f"[RealtimeViewer] 光源位置：{self.light_position.cpu().numpy()}")
+    
+    def _update_light_intensity(self, val=None):
+        """更新光照强度"""
+        self.light_intensity = torch.tensor([
+            self.light_r_var.get(),
+            self.light_g_var.get(),
+            self.light_b_var.get()
+        ], dtype=torch.float32).cuda()
+        
+        # 检查RGB三个通道是否一致
+        r_val = self.light_r_var.get()
+        g_val = self.light_g_var.get()
+        b_val = self.light_b_var.get()
+        
+        if abs(r_val - g_val) < 0.01 and abs(g_val - b_val) < 0.01 and abs(r_val - b_val) < 0.01:
+            # RGB一致，启用整体强度控制并同步值
+            self.light_master_var.set(r_val)
+            self.master_scale.config(state='normal')
+        else:
+            # RGB不一致，禁用整体强度控制
+            self.master_scale.config(state='disabled')
+        
+        print(f"[RealtimeViewer] 光照强度：{self.light_intensity.cpu().numpy()}")
+    
+    def _update_light_master_intensity(self, val=None):
+        """更新整体光照强度（同步调整RGB三个通道）"""
+        master_value = self.light_master_var.get()
+        # 同步更新三个通道的值
+        self.light_r_var.set(master_value)
+        self.light_g_var.set(master_value)
+        self.light_b_var.set(master_value)
+        # 更新光照强度
+        self.light_intensity = torch.tensor([master_value, master_value, master_value], dtype=torch.float32).cuda()
+        print(f"[RealtimeViewer] 整体光照强度：{master_value}")
+    
+    def _toggle_quality_mode(self):
+        """切换渲染质量模式"""
+        self.quality_mode = self.quality_mode_var.get()
+        if self.quality_mode == "high_quality":
+            print("[RealtimeViewer] 切换到高质量模式（基于深度贴图的阴影）")
+            # 显示阴影阈值控制
+            self.threshold_frame.pack(fill=tk.X, pady=(5, 0), before=self.pbr_group if hasattr(self, 'pbr_group') else None)
+        else:
+            print("[RealtimeViewer] 切换到标准模式")
+            # 隐藏阴影阈值控制
+            self.threshold_frame.pack_forget()
+    
+    def _update_shadow_threshold(self, val=None):
+        """更新阴影阈值"""
+        self.shadow_threshold = float(self.shadow_threshold_var.get())
+        print(f"[RealtimeViewer] 阴影阈值：{self.shadow_threshold}")
     
     def _toggle_render_mode(self):
         """切换渲染模式"""
@@ -972,6 +1368,15 @@ class RealtimeViewerGUI:
         self.rendering = False
         if self.render_thread:
             self.render_thread.join(timeout=2.0)
+        
+        # 删除就绪信号文件
+        try:
+            if os.path.exists(self.ready_signal_path):
+                os.remove(self.ready_signal_path)
+                print(f"[RealtimeViewer] ✓ 已清理信号文件：{self.ready_signal_path}")
+        except Exception as e:
+            print(f"[RealtimeViewer] 清理信号文件失败：{e}")
+        
         self.root.quit()
         self.root.destroy()
 

@@ -31,7 +31,7 @@
           <div class="loading-content">
             <span class="iconify loading-spinner" data-icon="solar:spinner-4"></span>
             <p class="loading-title">正在启动查看器...</p>
-            <p class="loading-subtitle">请稍候，查看器正在初始化</p>
+            <p class="loading-subtitle">请稍候，查看器正在初始化，这可能需要1-2分钟</p>
           </div>
         </div>
         
@@ -422,6 +422,15 @@ export default {
         this.loadingProjects.push(project.projectId);
         console.log(`[ProjectsPage] ⏳ 开始加载项目：${project.projectId}`);
         
+        // ✅ 新增：2 分钟超时自动移除加载动画
+        const loadingTimeout = setTimeout(() => {
+          console.log(`[ProjectsPage] ⚠️ 加载超时（2 分钟），强制移除加载动画：${project.projectId}`);
+          const index = this.loadingProjects.indexOf(project.projectId);
+          if (index > -1) {
+            this.loadingProjects.splice(index, 1);
+          }
+        }, 120000); // 2 分钟 = 120000 毫秒
+        
         // 构建命令参数
         const checkpointPath = `${project.outputPath}\\chkpnt40000.pth`;
         
@@ -486,14 +495,16 @@ export default {
         if (result?.success) {
           console.log('[ProjectsPage] ✓ Python 进程启动成功，PID:', result.pid);
           console.log('[ProjectsPage] ✓ GUI 已初始化完成，立即移除加载动画');
-          // ✅ 成功时立即移除加载状态
+          // ✅ 成功时立即移除加载状态并清除超时
+          clearTimeout(loadingTimeout);
           const index = this.loadingProjects.indexOf(project.projectId);
           if (index > -1) {
             this.loadingProjects.splice(index, 1);
           }
         } else {
           console.error('[ProjectsPage] ❌ Python 进程启动失败:', result?.error);
-          // ✅ 失败时也移除加载状态
+          // ✅ 失败时也移除加载状态并清除超时
+          clearTimeout(loadingTimeout);
           const index = this.loadingProjects.indexOf(project.projectId);
           if (index > -1) {
             this.loadingProjects.splice(index, 1);
@@ -514,7 +525,8 @@ ${error.message}
 3. 尝试重新创建项目`);
         }
         
-        // ✅ 异常时也要移除加载状态
+        // ✅ 异常时也要移除加载状态并清除超时
+        clearTimeout(loadingTimeout);
         const index = this.loadingProjects.indexOf(project.projectId);
         if (index > -1) {
           this.loadingProjects.splice(index, 1);
