@@ -1,1 +1,5 @@
 gs-ir-visualization/node_modules
+
+# 忽略外部开源项目
+Depth-Anything-3/
+Relightable3DGaussian/
