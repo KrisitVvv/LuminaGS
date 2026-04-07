@@ -72,10 +72,13 @@ if __name__ == "__main__":
         normal_from_depth_stack.append(normal_from_depth)
 
     # MAE
-    normal_gt_stack = np.stack(normal_gt_stack)
-    normal_gs_stack = np.stack(normal_gs_stack)
-    normal_from_depth_stack = np.stack(normal_from_depth_stack)
-    mae_gs = get_mae(normal_gt_stack, normal_gs_stack)
-    mae_from_depth = get_mae(normal_gt_stack, normal_from_depth_stack)
+    mae_gs_list = []
+    mae_from_depth_list = []
+    for i in range(len(normal_gt_stack)):
+        mae_gs_list.append(get_mae(normal_gt_stack[i], normal_gs_stack[i]))
+        mae_from_depth_list.append(get_mae(normal_gt_stack[i], normal_from_depth_stack[i]))
+        
+    mae_gs = np.mean(mae_gs_list)
+    mae_from_depth = np.mean(mae_from_depth_list)
     print(f"MAE: gs={mae_gs}; from_depth={mae_from_depth}")
 

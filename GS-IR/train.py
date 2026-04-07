@@ -269,6 +269,59 @@ def training(
             normal_tv_loss = get_tv_loss(gt_image, normal_map, pad=1, step=1)
             loss += normal_tv_loss * normal_tv_weight
 
+            # DA3 Normal Supervision
+            if hasattr(viewpoint_cam, "da3_normal") and viewpoint_cam.da3_normal is not None:
+                # [性能灾难修复]: 防止在 30000 次的主循环中重复进行每像素的矩阵乘法与 F.interpolate
+                if not hasattr(viewpoint_cam, "da3_normal_w"):
+                    # 1. 静态对齐坐标系: 将 DA3 (OpenCV) 的法线转换至 3DGS (OpenGL) 相机下
+                    gt_normal_c = viewpoint_cam.da3_normal.clone()  # [H, W, 3]
+                    gt_normal_c[..., 1:3] *= -1.0  # 静态翻转 Y, Z
+                    
+                    # 2. 提取 C2W 旋转矩阵
+                    c2w = torch.inverse(viewpoint_cam.world_view_transform.T)  # [4, 4]
+                    R_c2w = c2w[:3, :3]  # [3, 3]
+                    
+                    # 3. 将法线从相机空间变换到世界空间: N_world = R_c2w * N_camera
+                    _normal_w = torch.matmul(gt_normal_c, R_c2w.T)  # [H, W, 3]
+                    
+                    # 进行 L2 归一化并调整维度对齐渲染函数的输出 [3, H, W]
+                    _normal_w = F.normalize(_normal_w, p=2, dim=-1).permute(2, 0, 1).unsqueeze(0)  # [1, 3, H, W]
+                    
+                    # 对齐训练时的分辨率
+                    H, W = viewpoint_cam.image_height, viewpoint_cam.image_width
+                    if _normal_w.shape[2:] != (H, W):
+                        _normal_w = F.interpolate(_normal_w, size=(H, W), mode='nearest')
+                    
+                    # 缓存到相机对象中，后续迭代 O(1) 提取，包含彻底 detach()
+                    viewpoint_cam.da3_normal_w = _normal_w.squeeze(0).detach()  # [3, H, W]
+
+                # 提取已经完成所有变换、插值、脱离计算图的世界法线缓存
+                gt_normal_w = viewpoint_cam.da3_normal_w
+                
+                # --- 3. 天空掩蔽 (Opacity Masking) ---
+                # 获取渲染的不透明度构建 bool 掩码。仅选取具有实体的核心像素参与法线 Loss 计算。
+                opacity_map = rendering_result["opacity_map"].detach()  # [1, H, W]
+                valid_mask = (opacity_map > 0.5).squeeze(0)  # [H, W] 的真假二值化掩码
+                
+                # --- 5. 时间调度与预热 (Scheduling) ---
+                lambda_da3_normal = 0.0
+                if iteration > 5000:
+                    if iteration <= 15000:
+                        # 5000 - 15000 步: 线性平滑升至 0.05
+                        lambda_da3_normal = 0.01 + (iteration - 5000) * (0.04 / 10000.0)
+                    else:
+                        # 15000 步以后: 固定为 0.05，伴随后续阻断的新高斯生成
+                        lambda_da3_normal = 0.05
+                        
+                # --- 4. 双法线缓冲机制 (Dual Normal Loss) ---
+                # (注意: 代码上方的 normal_loss 已保留原版 internal loss)
+                if lambda_da3_normal > 0.0 and valid_mask.sum() > 0:
+                    # 使用 DA3 真值直接监督独立的显式渲染法线参数
+                    da3_l1 = F.l1_loss(normal_map[:, valid_mask], gt_normal_w[:, valid_mask])
+                    da3_cos = (1.0 - F.cosine_similarity(normal_map[:, valid_mask], gt_normal_w[:, valid_mask], dim=0)).mean()
+                    
+                    loss += lambda_da3_normal * (da3_l1 + da3_cos)
+
         else:  # NOTE: PBR
             if occlusion_flag and indirect:
                 filepath = os.path.join(os.path.dirname(checkpoint_path), "occlusion_volumes.pth")
@@ -406,7 +459,15 @@ def training(
             #    scene.save(iteration)
 
             # Densification
-            if iteration < opt.densify_until_iter:
+            if iteration < opt.densify_until_iter and iteration <= 15000:
+                # --- 2. 硬件防爆断路器 (Circuit Breaker) ---
+                current_gaussians_count = gaussians.get_xyz.shape[0]
+                dynamic_threshold = opt.densify_grad_threshold if iteration <= 5000 else opt.densify_grad_threshold * 2.0
+                
+                # 12GB 显存红线保护机制，超过 180W 停止分裂
+                if current_gaussians_count > 1800000:
+                    dynamic_threshold = float('inf')
+                
                 # Keep track of max radii in image-space for pruning
                 gaussians.max_radii2D[visibility_filter] = torch.max(
                     gaussians.max_radii2D[visibility_filter], radii[visibility_filter]
@@ -419,7 +480,7 @@ def training(
                 ):
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
                     gaussians.densify_and_prune(
-                        opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold
+                        dynamic_threshold, 0.005, scene.cameras_extent, size_threshold
                     )
 
                 if iteration % opt.opacity_reset_interval == 0 or (

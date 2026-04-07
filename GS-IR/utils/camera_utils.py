@@ -72,6 +72,8 @@ def loadCam(args: GroupParams, id: int, cam_info: CameraInfo, resolution_scale: 
         image_name=cam_info.image_name,
         uid=id,
         data_device=args.data_device,
+        da3_depth=cam_info.da3_depth,
+        da3_normal=cam_info.da3_normal,
     )
 
 

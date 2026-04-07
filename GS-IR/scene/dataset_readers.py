@@ -17,6 +17,7 @@ from typing import Dict, List, NamedTuple, Optional, Tuple
 
 import numpy as np
 from PIL import Image
+import torch
 from plyfile import PlyData, PlyElement
 
 from scene.colmap_loader import (
@@ -44,6 +45,8 @@ class CameraInfo(NamedTuple):
     image_name: str
     width: int
     height: int
+    da3_depth: Optional[torch.Tensor] = None
+    da3_normal: Optional[torch.Tensor] = None
 
 
 class SceneInfo(NamedTuple):
@@ -115,6 +118,17 @@ def readColmapCameras(
         image_name = os.path.basename(image_path).split(".")[0]
         image = Image.open(image_path)
 
+        # 加载预生成的 DA3 深度与法线
+        base_folder = os.path.dirname(images_folder)
+        da3_depth_path = os.path.join(base_folder, "da3_depth", f"{image_name}.npy")
+        da3_normal_path = os.path.join(base_folder, "da3_normal", f"{image_name}.npy")
+        
+        da3_depth = None
+        da3_normal = None
+        if os.path.exists(da3_depth_path) and os.path.exists(da3_normal_path):
+            da3_depth = torch.from_numpy(np.load(da3_depth_path)).cpu()
+            da3_normal = torch.from_numpy(np.load(da3_normal_path)).cpu()
+
         cam_info = CameraInfo(
             uid=uid,
             R=R,
@@ -126,6 +140,8 @@ def readColmapCameras(
             image_name=image_name,
             width=width,
             height=height,
+            da3_depth=da3_depth,
+            da3_normal=da3_normal,
         )
         cam_infos.append(cam_info)
     sys.stdout.write("\n")
