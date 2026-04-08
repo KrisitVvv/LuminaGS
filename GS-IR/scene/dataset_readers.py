@@ -125,9 +125,10 @@ def readColmapCameras(
         
         da3_depth = None
         da3_normal = None
-        if os.path.exists(da3_depth_path) and os.path.exists(da3_normal_path):
-            da3_depth = torch.from_numpy(np.load(da3_depth_path)).cpu()
-            da3_normal = torch.from_numpy(np.load(da3_normal_path)).cpu()
+        if os.environ.get('IS_BASELINE') != '1':
+            if os.path.exists(da3_depth_path) and os.path.exists(da3_normal_path):
+                da3_depth = torch.from_numpy(np.load(da3_depth_path)).cpu()
+                da3_normal = torch.from_numpy(np.load(da3_normal_path)).cpu()
 
         cam_info = CameraInfo(
             uid=uid,

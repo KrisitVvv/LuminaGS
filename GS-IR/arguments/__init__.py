@@ -59,6 +59,7 @@ class ModelParams(ParamGroup):
         self._white_background = False
         self.data_device = "cuda"
         self.eval = False
+        self.is_baseline = False
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args: Namespace) -> GroupParams:

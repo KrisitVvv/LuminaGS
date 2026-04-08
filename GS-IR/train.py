@@ -270,7 +270,7 @@ def training(
             loss += normal_tv_loss * normal_tv_weight
 
             # DA3 Normal Supervision
-            if hasattr(viewpoint_cam, "da3_normal") and viewpoint_cam.da3_normal is not None:
+            if not dataset.is_baseline and hasattr(viewpoint_cam, "da3_normal") and viewpoint_cam.da3_normal is not None:
                 # [性能灾难修复]: 防止在 30000 次的主循环中重复进行每像素的矩阵乘法与 F.interpolate
                 if not hasattr(viewpoint_cam, "da3_normal_w"):
                     # 1. 静态对齐坐标系: 将 DA3 (OpenCV) 的法线转换至 3DGS (OpenGL) 相机下
@@ -838,6 +838,10 @@ if __name__ == "__main__":
     args.test_iterations.append(args.iterations)
     args.save_iterations.append(args.iterations)
     args.checkpoint_iterations.append(args.iterations)
+    
+    if getattr(args, 'is_baseline', False):
+        import os
+        os.environ['IS_BASELINE'] = '1'
 
     print("Optimizing " + args.model_path)
 
