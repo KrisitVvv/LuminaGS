@@ -505,6 +505,35 @@ class GaussianModel:
                 optimizable_tensors[group["name"]] = group["params"][0]
         return optimizable_tensors
 
+    def prune_gs_ir_custom(self, min_opacity, extent, max_screen_size, prune_quantile=0.0):
+        """
+        基于分布感知的分位数截断自定义剪枝
+        该方法替代了原版简单的基于固定体积大小的剔除逻辑，新增对抗冗余微小点云的防御机制
+        """
+        with torch.no_grad():
+            # 1. 基础的不透明度剔除
+            prune_mask = (self.get_opacity < min_opacity).squeeze()
+            
+            scales = self.get_scaling
+            max_scales = torch.max(scales, dim=1).values
+            
+            # 2. 🚀 新增的核心功能：按分位数自适应剔除微小体素
+            if prune_quantile > 0.0:
+                adaptive_threshold = torch.quantile(max_scales, prune_quantile).item()
+                micro_splat_mask = max_scales < adaptive_threshold
+                prune_mask = torch.logical_or(prune_mask, micro_splat_mask)
+
+            # 3. 屏幕空间巨型点及世界空间超大点的修剪
+            if max_screen_size:
+                big_points_vs = self.max_radii2D > max_screen_size
+                big_points_ws = self.get_scaling.max(dim=1).values > 0.1 * extent
+                extreme_big_mask = torch.logical_and(big_points_vs, big_points_ws)
+                prune_mask = torch.logical_or(prune_mask, extreme_big_mask)
+
+            # 4. 执行物理切除与显存释放
+            self.prune_points(prune_mask)
+            torch.cuda.empty_cache()
+
     def prune_points(self, mask: torch.Tensor) -> None:
         valid_points_mask = ~mask
         optimizable_tensors = self._prune_optimizer(valid_points_mask)

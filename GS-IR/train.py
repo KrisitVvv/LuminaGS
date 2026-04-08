@@ -474,15 +474,7 @@ def training(
             #    scene.save(iteration)
 
             # Densification
-            if iteration < opt.densify_until_iter and iteration <= 15000:
-                # --- 2. 硬件防爆断路器 (Circuit Breaker) ---
-                current_gaussians_count = gaussians.get_xyz.shape[0]
-                dynamic_threshold = opt.densify_grad_threshold if iteration <= 5000 else opt.densify_grad_threshold * 2.0
-                
-                # 12GB 显存红线保护机制，超过 180W 停止分裂
-                if current_gaussians_count > 1800000:
-                    dynamic_threshold = float('inf')
-                
+            if iteration < opt.densify_until_iter:
                 # Keep track of max radii in image-space for pruning
                 gaussians.max_radii2D[visibility_filter] = torch.max(
                     gaussians.max_radii2D[visibility_filter], radii[visibility_filter]
@@ -494,14 +486,27 @@ def training(
                     and iteration % opt.densification_interval == 0
                 ):
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-                    gaussians.densify_and_prune(
-                        dynamic_threshold, 0.005, scene.cameras_extent, size_threshold
-                    )
+                    grads = gaussians.xyz_gradient_accum / gaussians.denom
+                    grads[grads.isnan()] = 0.0
+
+                    gaussians.densify_and_clone(grads, opt.densify_grad_threshold, scene.cameras_extent)
+                    gaussians.densify_and_split(grads, opt.densify_grad_threshold, scene.cameras_extent)
+                    
+                    if iteration < int(opt.iterations * 0.8):
+                        gaussians.prune_gs_ir_custom(
+                            min_opacity=opt.min_opacity,
+                            extent=scene.cameras_extent,
+                            max_screen_size=size_threshold,
+                            prune_quantile=opt.prune_quantile
+                        )
 
                 if iteration % opt.opacity_reset_interval == 0 or (
                     dataset.white_background and iteration == opt.densify_from_iter
                 ):
                     gaussians.reset_opacity()
+
+            if iteration == 30000:
+                print(f"[ITER {iteration}] Total Gaussian points after geometric training: {gaussians.get_xyz.shape[0]}")
 
             # Optimizer step
             if iteration < opt.iterations:
