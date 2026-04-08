@@ -303,24 +303,39 @@ def training(
                 opacity_map = rendering_result["opacity_map"].detach()  # [1, H, W]
                 valid_mask = (opacity_map > 0.5).squeeze(0)  # [H, W] 的真假二值化掩码
                 
-                # --- 5. 时间调度与预热 (Scheduling) ---
-                lambda_da3_normal = 0.0
-                if iteration > 5000:
-                    if iteration <= 15000:
-                        # 5000 - 15000 步: 线性平滑升至 0.05
-                        lambda_da3_normal = 0.01 + (iteration - 5000) * (0.04 / 10000.0)
-                    else:
-                        # 15000 步以后: 固定为 0.05，伴随后续阻断的新高斯生成
-                        lambda_da3_normal = 0.05
+                # --- 课程学习与先验衰减 (Prior Decay) ---
+                # 0 - 10000 步：DA3 先验主导，压平错误几何
+                if iteration <= 10000:
+                    current_lambda = 0.05
+                # 10000 - 25000 步：线性衰减，逐步交出控制权
+                elif iteration <= 25000:
+                    current_lambda = 0.05 * (1.0 - (iteration - 10000) / 15000.0)
+                # 25000 步以后：彻底关闭先验约束，全力拟合多视角光度学极限
+                else:
+                    current_lambda = 0.0
                         
-                # --- 4. 双法线缓冲机制 (Dual Normal Loss) ---
-                # (注意: 代码上方的 normal_loss 已保留原版 internal loss)
-                if lambda_da3_normal > 0.0 and valid_mask.sum() > 0:
-                    # 使用 DA3 真值直接监督独立的显式渲染法线参数
-                    da3_l1 = F.l1_loss(normal_map[:, valid_mask], gt_normal_w[:, valid_mask])
-                    da3_cos = (1.0 - F.cosine_similarity(normal_map[:, valid_mask], gt_normal_w[:, valid_mask], dim=0)).mean()
+                # --- 余弦相似度 + 一阶梯度损失 ---
+                if current_lambda > 0.0 and valid_mask.sum() > 0:
+                    # 确保参与计算的法线都已 L2 归一化
+                    norm_render = F.normalize(normal_map, p=2, dim=0)
+                    norm_da3 = F.normalize(gt_normal_w, p=2, dim=0) # 已经是 [3, H, W]
+
+                    # a. 余弦相似度损失 (仅约束方向，忽略绝对尺度误差)
+                    dot_product = torch.sum(norm_render * norm_da3, dim=0)
+                    cosine_loss = (1.0 - dot_product)[valid_mask].mean()
+
+                    # b. 一阶空间梯度损失 (保护 Lego 等数据集的硬边缘锐利度)
+                    diff_render_x = torch.abs(norm_render[:, :, :-1] - norm_render[:, :, 1:])
+                    diff_da3_x = torch.abs(norm_da3[:, :, :-1] - norm_da3[:, :, 1:])
+                    grad_loss_x = F.l1_loss(diff_render_x[:, valid_mask[:, :-1]], diff_da3_x[:, valid_mask[:, :-1]])
                     
-                    loss += lambda_da3_normal * (da3_l1 + da3_cos)
+                    diff_render_y = torch.abs(norm_render[:, :-1, :] - norm_render[:, 1:, :])
+                    diff_da3_y = torch.abs(norm_da3[:, :-1, :] - norm_da3[:, 1:, :])
+                    grad_loss_y = F.l1_loss(diff_render_y[:, valid_mask[:-1, :]], diff_da3_y[:, valid_mask[:-1, :]])
+
+                    # 组合子损失，赋予梯度损失适当权重（如 0.1）
+                    da3_total_loss = cosine_loss + 0.1 * (grad_loss_x + grad_loss_y)
+                    loss += current_lambda * da3_total_loss
 
         else:  # NOTE: PBR
             if occlusion_flag and indirect:
