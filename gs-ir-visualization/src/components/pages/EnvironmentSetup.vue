@@ -1,7 +1,6 @@
 <template>
   <section class="env-setup-container">
     <div class="env-setup-content">
-      <!-- 左侧：环境检测和说明 -->
       <div class="info-panel">
         <h3 class="panel-title">Python 环境配置</h3>
         
@@ -64,13 +63,9 @@
         </div>
       </div>
       
-      <!-- 右侧：安装操作区 -->
       <div class="action-panel">
-        
-        <!-- 一键安装区域 -->
         <div v-if="!envValid && hasConda && !isInstalling" class="install-section">
           <h4 class="section-title">一键安装环境</h4>
-          
           <div class="install-options">
             <div class="option-card" :class="{ selected: installMode === 'auto' }" @click="installMode = 'auto'">
               <div class="option-header">
@@ -89,7 +84,6 @@
             </div>
           </div>
           
-          <!-- 手动安装说明 -->
           <div v-if="installMode === 'manual'" class="manual-instructions">
             <div class="manual-header">
               <span class="iconify manual-icon" data-icon="solar:terminal-linear"></span>
@@ -157,7 +151,6 @@
             {{ isInstalling ? '安装中...' : '开始安装' }}
           </button>
           
-          <!-- 停止按钮（安装中显示） -->
           <button 
             v-if="isInstalling"
             class="stop-installation-btn"
@@ -167,12 +160,8 @@
             停止安装并清理缓存
           </button>
         </div>
-        
-        <!-- 进度条区域 - 独立显示，不依赖 envValid 和 hasConda -->
         <div v-if="isInstalling || installationProgress.length > 0" class="progress-section">
           <h4 class="section-title">安装进度</h4>
-          
-          <!-- 当前阶段提示 -->
           <div v-if="currentStage" class="stage-indicator">
             <span class="iconify stage-icon" data-icon="line-md:loading-loop"></span>
             <span class="stage-text">{{ currentStage }}</span>
@@ -185,7 +174,6 @@
             <span class="progress-percent">{{ installationProgressPercent.toFixed(1) }}%</span>
           </div>
           
-          <!-- 详细进度信息 -->
           <div class="progress-details">
             <div class="detail-item">
               <span class="detail-label">已用时间：</span>
@@ -247,7 +235,6 @@
       </div>
     </div>
     
-    <!-- 退出确认对话框 -->
     <div v-if="showQuitConfirm" class="modal-overlay">
       <div class="modal-dialog">
         <div class="modal-header">
@@ -306,10 +293,10 @@ export default {
       installationComplete: false,
       showQuitConfirm: false,
       quitProcesses: { hasTraining: false, hasBaking: false, hasInstallation: false },
-      currentStage: '', // 当前安装阶段
-      startTime: null, // 开始时间
-      elapsedTime: '00:00', // 已用时间
-      estimatedRemaining: '计算中...' // 估计剩余时间
+      currentStage: '',
+      startTime: null,
+      elapsedTime: '00:00',
+      estimatedRemaining: '计算中...'
     }
   },
   mounted() {
@@ -335,16 +322,14 @@ export default {
           console.log('condaPath:', result.conda);
           console.log('pythonPath:', result.python);
           
-          // 检查环境是否有效
           const envCheck = await window.electronAPI?.checkEnvironment();
           this.envValid = envCheck?.success && envCheck?.valid;
           
           console.log('envValid:', this.envValid);
           console.log('========================');
           
-          // 如果没有检测到 Conda，显示警告
           if (!this.hasConda) {
-            console.warn('⚠️ 未检测到 Conda！');
+            console.warn('未检测到 Conda！');
             alert('⚠️ 未检测到 Conda！\n\n请先安装 Miniconda 或 Anaconda，然后重启应用。\n\n下载地址：https://docs.conda.io/en/latest/miniconda.html');
           }
         } else {
@@ -359,8 +344,6 @@ export default {
     
     setupListeners() {
       console.log('===== 设置进度监听器 =====');
-      
-      // 监听环境安装进度
       window.electronAPI?.onEnvironmentProgress((data) => {
         console.log('收到进度更新:', data);
         
@@ -368,12 +351,8 @@ export default {
           type: data.type,
           message: data.data.trim()
         });
-        
-        // 智能解析进度
         if (data.type === 'stdout') {
           const output = data.data;
-          
-          // 解析 conda 下载进度（多种格式）
           const downloadPatterns = [
             /Downloading\s+.*?\s+(\d+)K/i,
             /\[(\d+)%\]/,
@@ -385,7 +364,6 @@ export default {
             const match = output.match(pattern);
             if (match) {
               const progress = parseInt(match[1]);
-              // 根据已下载量估算进度（假设总下载量约 500MB）
               const estimatedPercent = Math.min(Math.floor(progress / 3096), 90);
               if (estimatedPercent > this.installationProgressPercent) {
                 this.installationProgressPercent = estimatedPercent;
@@ -461,8 +439,6 @@ export default {
             this.installationProgressPercent = Math.max(this.installationProgressPercent - 5, 0);
           }
         }
-        
-        // 自动滚动到底部
         this.$nextTick(() => {
           const logContainer = this.$refs.progressLog;
           if (logContainer) {
@@ -473,7 +449,6 @@ export default {
     },
     
     setupQuitListener() {
-      // 监听退出确认
       window.electronAPI?.onConfirmQuit((data) => {
         this.quitProcesses = data;
         this.showQuitConfirm = true;
@@ -481,16 +456,12 @@ export default {
     },
     
     setupEnvironmentNeededListener() {
-      // 监听环境安装需求
       window.electronAPI?.onEnvironmentNeeded((data) => {
         console.log('收到环境安装需求:', data);
-        // 更新环境状态
         this.hasConda = data.hasConda || false;
         this.hasPython = data.hasPython || false;
-        this.envValid = false; // 需要安装，所以环境无效
+        this.envValid = false;
         this.detectionStatus = 'completed';
-        
-        // 自动跳转到环境设置页面
         if (this.$route.path !== '/environment') {
           this.$router.push('/environment');
         }
@@ -503,8 +474,7 @@ export default {
       console.log('===== 开始点击安装 =====');
       console.log('当前 hasConda:', this.hasConda);
       console.log('当前 envValid:', this.envValid);
-      
-      // 检查是否有 Conda
+
       if (!this.hasConda) {
         console.error('未检测到 Conda，无法安装');
         alert('未检测到 Conda，请先安装 Miniconda 或 Anaconda');
@@ -518,8 +488,6 @@ export default {
       this.startTime = new Date();
       this.elapsedTime = '00:00';
       this.estimatedRemaining = '计算中...';
-      
-      // 启动计时器
       this.startTimer();
       
       try {
@@ -530,12 +498,11 @@ export default {
           progressPercent: this.installationProgressPercent
         });
         
-        // 获取 environment.yml 路径 - 使用 Electron API 传递给主进程
         const scriptPath = '../../../GS-IR/install_environment.bat';
         
         console.log('调用 runInstallScript API, 参数:', { scriptPath, mode: this.installMode });
         
-        // 检查 electronAPI 是否存在
+        // 检查 electronAPI
         if (!window.electronAPI) {
           throw new Error('electronAPI 不可用，请检查 preload.js 配置');
         }
@@ -615,7 +582,6 @@ export default {
       this.$router.push('/train');
     },
     
-    // 调试方法
     testDebug() {
       console.log('===== 调试模式测试 =====');
       console.log('1. window.electronAPI:', window.electronAPI ? '存在' : '不存在');
@@ -626,29 +592,28 @@ export default {
       console.log('6. isInstalling:', this.isInstalling);
       
       if (!this.hasConda) {
-        alert('❌ 问题：hasConda 为 false\n\n原因：未检测到 Conda\n\n解决方案：请先安装 Miniconda');
+        alert('问题：hasConda 为 false\n\n原因：未检测到 Conda\n\n解决方案：请先安装 Miniconda');
       } else if (!window.electronAPI) {
-        alert('❌ 问题：electronAPI 不存在\n\n原因：preload.js 未正确加载');
+        alert('问题：electronAPI 不存在\n\n原因：preload.js 未正确加载');
       } else if (!window.electronAPI.createEnvironment) {
-        alert('❌ 问题：createEnvironment API 不存在\n\n原因：IPC 处理器未注册');
+        alert('问题：createEnvironment API 不存在\n\n原因：IPC 处理器未注册');
       } else {
-        alert('✅ 所有检查通过！\n\nh asConda: true\nelectronAPI: 存在\n可以尝试点击“开始安装”按钮');
+        alert('所有检查通过！\n\nh asConda: true\nelectronAPI: 存在\n可以尝试点击“开始安装”按钮');
       }
     },
     
     startTimer() {
-      this.stopTimer(); // 先清理之前的计时器
+      this.stopTimer();
       this.timerInterval = setInterval(() => {
         if (this.startTime) {
           const now = new Date();
-          const diff = Math.floor((now - this.startTime) / 1000); // 秒数
+          const diff = Math.floor((now - this.startTime) / 1000);
           
-          // 格式化已用时间
           const minutes = Math.floor(diff / 60);
           const seconds = diff % 60;
           this.elapsedTime = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
           
-          // 估算剩余时间（基于当前进度）
+          // 估算剩余时间
           if (this.installationProgressPercent > 5 && this.installationProgressPercent < 95) {
             const elapsedSeconds = diff;
             const percentPerSecond = this.installationProgressPercent / elapsedSeconds;
@@ -688,7 +653,6 @@ export default {
     }
   },
   beforeUnmount() {
-    // 组件销毁时清理计时器
     this.stopTimer();
   }
 }
@@ -1206,7 +1170,6 @@ export default {
   background-color: #d97706;
 }
 
-/* Conda 安装指南 */
 .conda-install-guide {
   background: white;
   padding: 1rem;
@@ -1425,7 +1388,6 @@ export default {
   color: #3b82f6;
 }
 
-/* 停止安装按钮 */
 .stop-installation-btn {
   width: 100%;
   margin-top: 0.75rem;
@@ -1447,7 +1409,6 @@ export default {
   background-color: #fecaca;
 }
 
-/* 退出确认对话框 */
 .modal-overlay {
   position: fixed;
   top: 0;
