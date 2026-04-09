@@ -306,7 +306,6 @@ export default {
   background-color: #6b21a8;
 }
 
-/* ✅ 新增：WebUI 提示弹窗样式 */
 .notice-dialog-overlay {
   position: fixed;
   top: 0;
@@ -414,7 +413,6 @@ export default {
   background-color: #6b21a8;
 }
 
-/* 响应式设计 */
 @media (max-width: 768px) {
   .engine-options {
     grid-template-columns: 1fr;

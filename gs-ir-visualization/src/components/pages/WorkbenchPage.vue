@@ -83,8 +83,6 @@ export default {
   name: 'WorkbenchPage',
   setup() {
     const router = useRouter()
-    
-    // 统计数据
     const projectCount = ref(0)
     const renderHours = ref(0)
     const storageSize = ref('0 GB')
@@ -93,7 +91,6 @@ export default {
     // 加载统计数据
     const loadStats = async () => {
       try {
-        // 获取项目列表
         const result = await window.electronAPI.getProjectList()
         if (!result.success) {
           console.error('[Workbench] 获取项目列表失败:', result.error)
@@ -101,8 +98,6 @@ export default {
         }
         
         const projects = result.data || []
-        
-        // 只统计 completed 状态的项目
         const completedProjects = projects.filter(p => p.status === 'completed')
         projectCount.value = completedProjects.length
         

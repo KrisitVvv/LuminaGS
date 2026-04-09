@@ -23,10 +23,7 @@
         <p>暂无项目</p>
         <button class="create-btn" @click="createNewProject">创建第一个项目</button>
       </div>
-      
-      <!-- 项目列表 -->
       <div v-else class="projects-grid">
-        <!-- ✅ 全屏加载覆盖层 -->
         <div v-if="loadingProjects.length > 0" class="fullscreen-loading-overlay">
           <div class="loading-content">
             <span class="iconify loading-spinner" data-icon="solar:spinner-4"></span>
@@ -34,7 +31,6 @@
             <p class="loading-subtitle">请稍候，查看器正在初始化，这可能需要1-2分钟</p>
           </div>
         </div>
-        
         <div 
           v-for="project in filteredProjects" 
           :key="project.projectId" 
@@ -177,7 +173,6 @@ export default {
       deleteConfirmText: '',
       deleteErrorMessage: '',
       isDeleting: false,
-      // ✅ 正在加载的项目 ID 集合（使用数组以保证响应式）
       loadingProjects: []
     }
   },
@@ -185,13 +180,10 @@ export default {
     try {
       this.platform = await window.electronAPI?.getPlatform() || 'win32';
       console.log('[ProjectsPage] 操作系统平台:', this.platform);
-      
-      // 自动同步 sourcePath 字段
-      console.log('[ProjectsPage] 🔍 检查并同步 sourcePath 字段...');
+      // 同步 sourcePath 字段
       const syncResult = await window.electronAPI?.syncSourcePathToProjects();
       if (syncResult?.success) {
-        console.log(`[ProjectsPage] ✅ ${syncResult.message}`);
-        // 同步后重新加载项目列表
+        console.log(`[ProjectsPage] ${syncResult.message}`);
         this.loadProjects();
       }
     } catch (error) {
@@ -201,7 +193,6 @@ export default {
   },
   computed: {
     completedCount() {
-      //只统计已完成的项目数量
       return this.projects.filter(project => 
         project.status === 'completed'
       ).length;
@@ -209,7 +200,6 @@ export default {
     
     filteredProjects() {
       if (!this.searchQuery) {
-        // 只显示已完成的项目
         return this.projects.filter(project => 
           project.status === 'completed'
         );
@@ -225,7 +215,7 @@ export default {
   },
   methods: {
     async loadProjects() {
-      console.log('[ProjectsPage] 🔍 开始加载项目列表...');
+      console.log('[ProjectsPage] 加载项目列表...');
       this.loading = true;
           
       try {
@@ -233,7 +223,7 @@ export default {
             
         if (result?.success && result.data) {
           this.projects = result.data;
-          console.log(`[ProjectsPage] ✅ 加载了 ${this.projects.length} 个项目`);
+          console.log(`[ProjectsPage] 加载了 ${this.projects.length} 个项目`);
           this.projects.forEach((project, index) => {
             console.log(`[ProjectsPage] 项目 ${index + 1}:`, {
               projectId: project.projectId,
@@ -245,14 +235,14 @@ export default {
             });
           });
               
-          //异步加载项目图片 URL
+          // 加载项目图片 URL
           await this.loadAllProjectImages();
         } else {
-          console.error('[ProjectsPage] ❌ 加载失败:', result?.error);
+          console.error('[ProjectsPage] 加载失败:', result?.error);
           this.projects = [];
         }
       } catch (error) {
-        console.error('[ProjectsPage] ❌ 加载项目失败:', error);
+        console.error('[ProjectsPage] 加载项目失败:', error);
         this.projects = [];
       } finally {
         this.loading = false;
@@ -265,11 +255,8 @@ export default {
       
       for (let i = 0; i < this.projects.length; i++) {
         const project = this.projects[i];
-        
         try {
-          // 尝试加载缩略图或预览图
           const imageUrl = await this.getProjectImage(project);
-          
           if (imageUrl) {
             project.imageUrl = imageUrl;
             project.imageLoaded = true;
@@ -283,55 +270,49 @@ export default {
           console.error(`[ProjectsPage] 项目 ${i + 1} 图片加载失败:`, error);
         }
       }
-      
-      console.log('[ProjectsPage] 所有项目图片加载完成');
     },
     
     async getProjectImage(project) {
-      // ✅ 新增：首先检查 project 对象是否有 thumbnailPath 或 previewImagePath
       console.log(`[ProjectsPage] 检查项目图片：${project.projectId}`, {
         thumbnailPath: project.thumbnailPath,
         previewImagePath: project.previewImagePath
       });
-      
-      // 优先使用缩略图路径
+      // 使用缩略图路径
       if (project.thumbnailPath) {
         try {
-          // ✅ 使用 Electron API 转换为可访问的 URL
           const result = await window.electronAPI?.convertFilePath(project.thumbnailPath);
           
           if (result?.success && result.url) {
-            console.log(`[ProjectsPage] 🖼️ 加载缩略图：${result.url}`);
+            console.log(`[ProjectsPage] 加载缩略图：${result.url}`);
             return result.url;
           } else {
-            console.warn(`[ProjectsPage] ⚠️ 转换缩略图路径失败：`, result?.error);
+            console.warn(`[ProjectsPage] 转换缩略图路径失败：`, result?.error);
             return null;
           }
         } catch (error) {
-          console.error('[ProjectsPage] ❌ 转换缩略图路径失败:', error);
+          console.error('[ProjectsPage] 转换缩略图路径失败:', error);
           return null;
         }
       }
-      
-      // 如果没有缩略图，尝试使用预览图路径
+      // 使用预览图路径
       if (project.previewImagePath) {
         try {
           const result = await window.electronAPI?.convertFilePath(project.previewImagePath);
           
           if (result?.success && result.url) {
-            console.log(`[ProjectsPage] 🖼️ 加载预览图：${result.url}`);
+            console.log(`[ProjectsPage] 加载预览图：${result.url}`);
             return result.url;
           } else {
-            console.warn(`[ProjectsPage] ⚠️ 转换预览图路径失败：`, result?.error);
+            console.warn(`[ProjectsPage] 转换预览图路径失败：`, result?.error);
             return null;
           }
         } catch (error) {
-          console.error('[ProjectsPage] ❌ 转换预览图路径失败:', error);
+          console.error('[ProjectsPage] 转换预览图路径失败:', error);
           return null;
         }
       }
       
-      console.log(`[ProjectsPage] ℹ️ 无可用图片：${project.projectId}`);
+      console.log(`[ProjectsPage] 无可用图片：${project.projectId}`);
       return null;
     },
     
@@ -388,58 +369,45 @@ export default {
     
     createNewProject() {
       console.log('[ProjectsPage] 创建新项目');
-      // 跳转到 TrainPage 创建新项目
       this.$router.push({ name: 'train' });
     },
     
     async openProject(project) {
-      console.log('====== [ProjectsPage] 点击项目 ======');
+      console.log('[ProjectsPage] 点击项目');
       console.log('[ProjectsPage] 打开项目:', project.name, project.projectId, project.outputPath);
       console.log('[ProjectsPage] 完整项目数据:', JSON.stringify(project, null, 2));
-      
-      // 检查是否有项目 ID
       if (!project.projectId) {
-        console.error('[ProjectsPage] ❌ 项目 ID 为空！');
+        console.error('[ProjectsPage] 项目 ID 为空！');
         return;
       }
       
-      // 检查是否有输出路径
+      // 检查输出路径
       if (!project.outputPath) {
-        console.warn('[ProjectsPage] ⚠️ 项目输出路径为空，使用默认值');
+        console.warn('[ProjectsPage] 项目输出路径为空，使用默认值');
         project.outputPath = `output/${project.projectId}`;
       }
-      
-      console.log('[ProjectsPage] 🐍 准备启动 Python 实时查看器...');
-      
-      // ✅ 检查是否已经在加载中
       if (this.loadingProjects.includes(project.projectId)) {
-        console.warn('[ProjectsPage] ⚠️ 该项目已在加载中，忽略重复点击');
+        console.warn('[ProjectsPage] 该项目已在加载中，忽略重复点击');
         return;
       }
       
       try {
-        // 设置加载状态
         this.loadingProjects.push(project.projectId);
-        console.log(`[ProjectsPage] ⏳ 开始加载项目：${project.projectId}`);
+        console.log(`[ProjectsPage] 开始加载项目：${project.projectId}`);
         
-        // ✅ 新增：2 分钟超时自动移除加载动画
         const loadingTimeout = setTimeout(() => {
-          console.log(`[ProjectsPage] ⚠️ 加载超时（2 分钟），强制移除加载动画：${project.projectId}`);
+          console.log(`[ProjectsPage] 加载超时（2 分钟），强制移除加载动画：${project.projectId}`);
           const index = this.loadingProjects.indexOf(project.projectId);
           if (index > -1) {
             this.loadingProjects.splice(index, 1);
           }
-        }, 120000); // 2 分钟 = 120000 毫秒
-        
-        // 构建命令参数
+        }, 120000);
         const checkpointPath = `${project.outputPath}\\chkpnt40000.pth`;
         
         // 数据集路径：优先从项目配置中获取
-        // 注意：实际应该通过 project.configFile 读取详细配置文件获取 sourcePath
-        // 但当前 projects.json 已经包含 sourcePath 字段，简化处理直接使用
         let sourcePath = project.datasetPath || project.sourcePath;
         
-        console.log('[ProjectsPage] 🔍 检查项目配置数据:', {
+        console.log('[ProjectsPage] 检查项目配置数据:', {
           hasConfigFile: !!project.configFile,
           hasSourcePath: !!project.sourcePath,
           hasDatasetPath: !!project.datasetPath,
@@ -447,9 +415,7 @@ export default {
         });
         
         if (!sourcePath) {
-          console.error('[ProjectsPage] ❌ 项目数据集中路径缺失，项目已损坏！');
-          
-          // 弹出错误提示
+          console.error('[ProjectsPage] 项目数据集中路径缺失，项目已损坏！');
           alert(`项目已损坏
 
 项目名称：${project.name}
@@ -459,9 +425,9 @@ export default {
 
 请检查项目配置或重新创建项目。`);
           
-          return; // 终止后续操作
+          return;
         } else {
-          console.log('[ProjectsPage] ✓ 使用项目配置的数据集路径:', sourcePath);
+          console.log('[ProjectsPage] 使用项目配置的数据集路径:', sourcePath);
         }
         
         const args = [
@@ -480,30 +446,27 @@ export default {
           conda_env: 'gsir'
         });
         
-        // 调用 Electron API 启动 Python 脚本（使用 conda activate gsir）
-        // 工作目录设置为项目输出目录，确保能正确找到模型文件
         const result = await window.electronAPI?.spawnPythonProcess({
           script: 'realtime_gaussian_viewer_gui.py',
           args: args,
-          cwd: project.outputPath, // 使用项目输出目录作为工作目录
-          useConda: true,          // 使用 conda 运行
-          condaEnv: 'gsir',        // 指定 conda 环境名称
-          scriptDir: 'E:\\GraduationProject\\LuminaGS\\GS-IR' // TODO: 脚本所在目录，需要从配置中读取
+          cwd: project.outputPath, 
+          useConda: true, 
+          condaEnv: 'gsir', 
+          scriptDir: 'E:\\GraduationProject\\LuminaGS\\GS-IR' 
         });
         
-        // ✅ 根据结果处理加载状态
+        // 加载状态
         if (result?.success) {
-          console.log('[ProjectsPage] ✓ Python 进程启动成功，PID:', result.pid);
-          console.log('[ProjectsPage] ✓ GUI 已初始化完成，立即移除加载动画');
-          // ✅ 成功时立即移除加载状态并清除超时
+          console.log('[ProjectsPage] Python 进程启动成功，PID:', result.pid);
+          console.log('[ProjectsPage] GUI 已初始化完成，立即移除加载动画');
+          // 移除加载状态
           clearTimeout(loadingTimeout);
           const index = this.loadingProjects.indexOf(project.projectId);
           if (index > -1) {
             this.loadingProjects.splice(index, 1);
           }
         } else {
-          console.error('[ProjectsPage] ❌ Python 进程启动失败:', result?.error);
-          // ✅ 失败时也移除加载状态并清除超时
+          console.error('[ProjectsPage] Python 进程启动失败:', result?.error);
           clearTimeout(loadingTimeout);
           const index = this.loadingProjects.indexOf(project.projectId);
           if (index > -1) {
@@ -511,7 +474,7 @@ export default {
           }
         }
       } catch (error) {
-        console.error('[ProjectsPage] ❌ 启动 Python 进程异常:', error);
+        console.error('[ProjectsPage] 启动 Python 进程异常:', error);
         
         // ✅ 检查是否是超时错误
         if (error.message && error.message.includes('超时')) {
@@ -525,7 +488,6 @@ ${error.message}
 3. 尝试重新创建项目`);
         }
         
-        // ✅ 异常时也要移除加载状态并清除超时
         clearTimeout(loadingTimeout);
         const index = this.loadingProjects.indexOf(project.projectId);
         if (index > -1) {
@@ -533,12 +495,11 @@ ${error.message}
         }
       }
       
-      console.log(`[ProjectsPage] ✅ 完成加载项目：${project.projectId}`);
-      console.log('[ProjectsPage] ✓ 操作完成');
+      console.log(`[ProjectsPage] 完成加载项目：${project.projectId}`);
+      console.log('[ProjectsPage] 操作完成');
       console.log('====================================\n');
     },
     
-    // ✅ 新增：显示上下文菜单
     showContextMenu(event, project) {
       console.log('[ProjectsPage] 🔴 showContextMenu 被调用！', event.type);
       
@@ -548,40 +509,30 @@ ${error.message}
       
       this.currentSelectedProject = project;
       
-      // 计算菜单位置（确保不超出屏幕）
+      // 计算菜单位置
       const menuWidth = 200;
       const menuHeight = 100;
       const rect = event.target.getBoundingClientRect();
       
       let top = rect.bottom + window.scrollY;
       let left = rect.right - menuWidth + window.scrollX;
-      
-      // 检查是否超出右边界
       if (left + menuWidth > window.innerWidth) {
         left = window.innerWidth - menuWidth - 10;
       }
-      
-      // 检查是否超出下边界
       if (top + menuHeight > window.innerHeight) {
         top = rect.top - menuHeight + window.scrollY;
       }
-      
       this.contextMenuPosition = { top, left };
       this.contextMenuVisible = true;
-      
-      console.log('[ProjectsPage] ✓ 菜单已显示:', {
+      console.log('[ProjectsPage] 菜单已显示:', {
         project: project.name,
         position: { top, left }
       });
     },
-    
-    // ✅ 新增：隐藏上下文菜单
     hideContextMenu() {
       this.contextMenuVisible = false;
       this.currentSelectedProject = null;
     },
-    
-    // ✅ 新增：显示重命名弹窗
     showRenameDialog(project) {
       if (!project) return;
       
@@ -594,7 +545,6 @@ ${error.message}
       
       console.log('[ProjectsPage] 打开重命名弹窗:', project.name);
       
-      // 弹窗打开后自动聚焦输入框并选中文本
       this.$nextTick(() => {
         if (this.$refs.renameInput) {
           this.$refs.renameInput.focus();
@@ -603,17 +553,14 @@ ${error.message}
       });
     },
     
-    // ✅ 新增：关闭重命名弹窗
     closeRenameDialog() {
       this.renameDialogVisible = false;
       this.newProjectName = '';
       this.errorMessage = '';
       this.isConfirming = false;
       this.currentSelectedProject = null;
-      console.log('[ProjectsPage] 关闭重命名弹窗');
     },
     
-    // ✅ 新增：确认重命名
     async confirmRename() {
       if (!this.currentSelectedProject) return;
       
@@ -621,48 +568,41 @@ ${error.message}
       const trimmedName = this.newProjectName.trim();
       
       console.log('[ProjectsPage] 确认重命名:', trimmedName);
-      
-      // 验证名称
       if (!trimmedName) {
         this.errorMessage = '项目名称不能为空';
         return;
       }
-      
-      // 检查名称是否改变
       if (trimmedName === project.name) {
         this.errorMessage = '项目名称未改变';
         return;
       }
       
-      // 验证非法字符（不允许包含 \ / : * ? " < > |）
+      // 验证非法字符
       const invalidCharsPattern = /[\\/:*?"<>|]/;
       if (invalidCharsPattern.test(trimmedName)) {
         this.errorMessage = '项目名称不能包含以下字符：\\ / : * ? " < > |';
         return;
       }
-      
-      // 开始重命名
       this.isConfirming = true;
       this.errorMessage = '';
       
       try {
         // 调用 Electron API 更新项目配置
-        // 这会同时更新 projects.json 和项目配置文件中的 name 字段
         const result = await window.electronAPI?.updateProjectConfig(project.projectId, {
           projectName: trimmedName
         });
         
         if (result?.success) {
-          console.log(`[ProjectsPage] ✓ 重命名成功：${project.name} -> ${trimmedName}`);
+          console.log(`[ProjectsPage] 重命名成功：${project.name} -> ${trimmedName}`);
           // 更新本地数据
           project.name = trimmedName;
           this.closeRenameDialog();
         } else {
-          console.error('[ProjectsPage] ❌ 重命名失败:', result?.error);
+          console.error('[ProjectsPage]重命名失败:', result?.error);
           this.errorMessage = '重命名失败：' + (result?.error || '未知错误');
         }
       } catch (error) {
-        console.error('[ProjectsPage] ❌ 重命名异常:', error);
+        console.error('[ProjectsPage]重命名异常:', error);
         this.errorMessage = '重命名失败：' + error.message;
       } finally {
         this.isConfirming = false;
@@ -673,7 +613,6 @@ ${error.message}
       this.showRenameDialog(project);
     },
     
-    // ✅ 新增：显示删除确认弹窗
     showDeleteDialog(project) {
       if (!project) return;
       
@@ -685,16 +624,12 @@ ${error.message}
       this.deleteDialogVisible = true;
       
       console.log('[ProjectsPage] 打开删除确认弹窗:', project.name);
-      
-      // 弹窗打开后自动聚焦输入框
       this.$nextTick(() => {
         if (this.$refs.deleteInput) {
           this.$refs.deleteInput.focus();
         }
       });
     },
-    
-    // ✅ 新增：关闭删除确认弹窗
     closeDeleteDialog() {
       this.deleteDialogVisible = false;
       this.deleteConfirmText = '';
@@ -704,50 +639,39 @@ ${error.message}
       console.log('[ProjectsPage] 关闭删除确认弹窗');
     },
     
-    // ✅ 新增：确认删除项目（彻底删除所有内容）
     async confirmDelete() {
       if (!this.currentSelectedProject) return;
-      
       const project = this.currentSelectedProject;
-      
-      // 验证是否输入了 DELETE
       if (this.deleteConfirmText !== 'DELETE') {
         this.deleteErrorMessage = '请输入 "DELETE" 以确认删除';
         return;
       }
-      
-      console.log('[ProjectsPage] 确认删除项目:', project.name);
-      
-      // 开始删除
       this.isDeleting = true;
       this.deleteErrorMessage = '';
       
       try {
         // 调用 Electron API 删除项目及其所有输出文件
-        // 这会删除整个 outputPath 目录下的所有内容
         const result = await window.electronAPI?.deleteProjectAndOutput(project.projectId, project.outputPath);
-        
         if (result?.success) {
-          console.log(`[ProjectsPage] ✓ 删除成功：${project.name}`);
-          // 从列表中移除该项目
+          console.log(`[ProjectsPage] 删除成功：${project.name}`);
           const index = this.projects.findIndex(p => p.projectId === project.projectId);
           if (index !== -1) {
             this.projects.splice(index, 1);
           }
           this.closeDeleteDialog();
         } else {
-          console.error('[ProjectsPage] ❌ 删除失败:', result?.error);
+          console.error('[ProjectsPage] 删除失败:', result?.error);
           this.deleteErrorMessage = '删除失败：' + (result?.error || '未知错误');
         }
       } catch (error) {
-        console.error('[ProjectsPage] ❌ 删除异常:', error);
+        console.error('[ProjectsPage] 删除异常:', error);
         this.deleteErrorMessage = '删除失败：' + error.message;
       } finally {
         this.isDeleting = false;
       }
     },
     
-    // ✅ 修改：删除项目（保留作为兼容，实际使用 showDeleteDialog）
+    // 保留作为兼容
     async deleteProject(project) {
       this.showDeleteDialog(project);
     },
@@ -930,7 +854,6 @@ ${error.message}
   border-color: #ddd6fe;
 }
 
-/* ✅ 全屏加载动画覆盖层 */
 .fullscreen-loading-overlay {
   position: fixed;
   top: 0;
@@ -1122,7 +1045,6 @@ ${error.message}
   background-color: #e2e8f0;
 }
 
-/* ✅ 新增：上下文菜单样式 */
 .context-menu-overlay {
   position: fixed;
   top: 0;
@@ -1130,7 +1052,6 @@ ${error.message}
   right: 0;
   bottom: 0;
   z-index: 9999;
-  /* 透明背景，点击关闭菜单 */
 }
 
 .menu-icon-wrapper {
@@ -1141,7 +1062,6 @@ ${error.message}
   cursor: pointer;
   border-radius: 0.25rem;
   transition: all 0.2s ease;
-  /* ✅ 确保可以点击且不被遮挡 */
   pointer-events: auto;
   user-select: none;
 }
@@ -1230,7 +1150,6 @@ ${error.message}
   color: #dc2626;
 }
 
-/* ✅ 新增：重命名弹窗样式 */
 .rename-dialog-overlay {
   position: fixed;
   top: 0;
@@ -1379,7 +1298,6 @@ ${error.message}
   cursor: not-allowed;
 }
 
-/* ✅ 新增：删除弹窗样式 */
 .delete-dialog-overlay {
   position: fixed;
   top: 0;

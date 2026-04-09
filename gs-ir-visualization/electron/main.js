@@ -8,10 +8,10 @@ const ProjectManager = require('./projectManager');
 
 Menu.setApplicationMenu(null);
 let mainWindow = null;
-let editorWindow = null; // Editor 专用窗口
+let editorWindow = null; 
 const isPackaged = app.isPackaged;
 
-// 注册自定义协议 luma:// 用于访问本地文件
+// Register the custom protocol luma:// for accessing local files
 protocol.registerSchemesAsPrivileged([{
   scheme: 'luma',
   privileges: {
@@ -25,10 +25,10 @@ protocol.registerSchemesAsPrivileged([{
   }
 }]);
 
-// 初始化 Python 环境管理器
+// Initialize Python environment manager
 const envManager = new PythonEnvironmentManager();
 
-// ✅ 辅助函数：获取图片的 MIME 类型
+// Get the MIME type of an image based on its extension
 function getImageMimeType(ext) {
   const mimeTypes = {
     '.png': 'image/png',
@@ -41,10 +41,8 @@ function getImageMimeType(ext) {
   return mimeTypes[ext] || 'application/octet-stream';
 }
 
-// 将 mainWindow 暴露给全局，供环境管理模块使用
+// Expose mainWindow to global
 global.mainWindow = null;
-
-// 初始化项目管理器
 const projectManager = new ProjectManager();
 
 const createWindow = () => {
@@ -57,69 +55,55 @@ const createWindow = () => {
       nodeIntegration: false, 
       contextIsolation: true,
       preload: __dirname + '/preload.js',
-      // 允许加载本地文件
       webviewTag: true,
-      // 允许跨域请求本地文件
       sandbox: false
     }
   })
-
-  // 暴露给全局
   global.mainWindow = mainWindow;
 
-  // 修改为实际运行的端口
   mainWindow.loadURL("http://localhost:5173/");
 
   if (!isPackaged) {
     mainWindow.webContents.openDevTools();
   }
   
-  // 监听窗口最大化事件
   mainWindow.on('maximize', () => {
-    console.log('窗口已最大化');
+    console.log('Window maximized');
     mainWindow.webContents.send('window-maximized');
   });
   
-  // 监听窗口取消最大化事件
   mainWindow.on('unmaximize', () => {
-    console.log('窗口已恢复');
+    console.log('Window restored.');
     mainWindow.webContents.send('window-restored');
   });
   
-  // 监听窗口进入全屏事件
   mainWindow.on('enter-full-screen', () => {
-    console.log('窗口进入全屏');
+    console.log('Window entered full-screen');
     mainWindow.webContents.send('window-maximized');
   });
   
-  // 监听窗口退出全屏事件
   mainWindow.on('leave-full-screen', () => {
-    console.log('窗口退出全屏');
+    console.log('Window left full-screen.');
     mainWindow.webContents.send('window-restored');
   });
   
-  // 监听窗口resize事件，处理拖动后的状态变化
   mainWindow.on('resize', () => {
-    // 延迟执行以确保状态已经更新
     setTimeout(() => {
       if (mainWindow) {
         const isMaximized = mainWindow.isMaximized();
         const isFullScreen = mainWindow.isFullScreen();
+        console.log(`Window status check - Maximized: ${isMaximized}, Full-screen: ${isFullScreen}`);
         
-        console.log(`窗口状态检查 - 最大化: ${isMaximized}, 全屏: ${isFullScreen}`);
-        
-        // 如果既不是最大化也不是全屏，则发送恢复消息
         if (!isMaximized && !isFullScreen) {
-          console.log('发送窗口恢复消息');
+          console.log('Window restored.');
           mainWindow.webContents.send('window-restored');
         }
-        // 如果是最大化或全屏状态，发送最大化消息
         else if (isMaximized || isFullScreen) {
-          console.log('发送窗口最大化消息');
+          console.log('Window maximized');
           mainWindow.webContents.send('window-maximized');
         }
       }
-    }, 150); // 增加延迟时间确保状态稳定
+    }, 150);
   });
 }
 
@@ -127,7 +111,7 @@ ipcMain.handle('minimize-window', async (event) => {
   const window = BrowserWindow.fromWebContents(event.sender);
   if (window) {
     window.minimize();
-    console.log('[EditorWindow] ✓ 已最小化');
+    console.log('[EditorWindow] minimized windows');
   }
 });
 
@@ -135,7 +119,7 @@ ipcMain.handle('maximize-window', async (event) => {
   const window = BrowserWindow.fromWebContents(event.sender);
   if (window) {
     window.maximize();
-    console.log('[EditorWindow] ✓ 已最大化');
+    console.log('[EditorWindow] maximized window');
   }
 });
 
@@ -143,7 +127,7 @@ ipcMain.handle('restore-window', async (event) => {
   const window = BrowserWindow.fromWebContents(event.sender);
   if (window) {
     window.restore();
-    console.log('[EditorWindow] ✓ 已恢复');
+    console.log('[EditorWindow] restored window');
   }
 });
 
@@ -151,44 +135,38 @@ ipcMain.handle('close-window', async (event) => {
   const window = BrowserWindow.fromWebContents(event.sender);
   if (window) {
     window.close();
-    console.log('[EditorWindow] ✓ 已关闭');
+    console.log('[EditorWindow] closed window');
   }
 });
 
-// ✅ 新增：打开 Editor 窗口
 ipcMain.handle('open-editor-window', async (event, config) => {
   try {
-    console.log('[IPC] 打开 Editor 窗口，配置:', config);
+    console.log('[IPC] Open Editor window, config:', config);
     
     if (editorWindow) {
-      // 如果已存在，聚焦到该窗口
       editorWindow.focus();
       return { success: true, existed: true };
     }
     
-    // 创建新的 Editor 窗口
+    // Create new Editor window
     editorWindow = new BrowserWindow({
       width: 1920,
       height: 1080,
-      frame: false, // 无边框
+      frame: false, 
       movable: true,
       fullscreen: false,
       fullscreenable: true,
-      hasShadow: false, // 无阴影
+      hasShadow: false, 
       transparent: false,
       webPreferences: {
         nodeIntegration: false,
         contextIsolation: true,
         preload: __dirname + '/preload.js'
       },
-      show: false, // 先隐藏，加载完成后再显示
-      backgroundColor: '#1e1e1e' // 深色背景
+      show: false, 
+      backgroundColor: '#1e1e1e' 
     });
-    
-    // 设置窗口标题
     editorWindow.setTitle('LuminaGS - Editor');
-    
-    // 构建 URL，传递项目参数
     const url = new URL('http://localhost:5173/');
     url.pathname = '/editor';
     
@@ -203,29 +181,22 @@ ipcMain.handle('open-editor-window', async (event, config) => {
     if (config?.checkpoint) {
       url.searchParams.append('checkpoint', config.checkpoint);
     }
-    
-    // 加载页面
     editorWindow.loadURL(url.toString());
     
-    // 监听窗口关闭事件
     editorWindow.on('closed', () => {
       console.log('[EditorWindow] 窗口已关闭');
       editorWindow = null;
     });
-    
-    // 监听窗口进入全屏
     editorWindow.on('enter-full-screen', () => {
       console.log('[EditorWindow] 进入全屏');
       editorWindow.webContents.send('window-maximized');
     });
     
-    // 监听窗口退出全屏
     editorWindow.on('leave-full-screen', () => {
       console.log('[EditorWindow] 退出全屏');
       editorWindow.webContents.send('window-restored');
     });
     
-    // ✅ 新增：监听窗口最大化/恢复（针对无边框窗口的模拟）
     editorWindow.on('maximize', () => {
       console.log('[EditorWindow] 最大化');
       editorWindow.webContents.send('window-maximized');
@@ -235,23 +206,22 @@ ipcMain.handle('open-editor-window', async (event, config) => {
       console.log('[EditorWindow] 恢复');
       editorWindow.webContents.send('window-restored');
     });
-    
-    // 窗口准备好后显示
+      
+    // Window is ready to show
     editorWindow.once('ready-to-show', () => {
       editorWindow.show();
       editorWindow.maximize();
     });
     
-    // 开发模式下打开 DevTools
     if (!isPackaged) {
       editorWindow.webContents.openDevTools();
     }
     
-    console.log('[EditorWindow] ✓ Editor 窗口已创建');
+    console.log('[EditorWindow] Editor window created');
     return { success: true, existed: false };
     
   } catch (error) {
-    console.error('[EditorWindow] ❌ 创建窗口失败:', error);
+    console.error('[EditorWindow] Failed to create window:', error);
     return { success: false, error: error.message };
   }
 });
@@ -264,11 +234,11 @@ ipcMain.handle('start-dragging', async (event) => {
   }
 });
 
-// 文件选择对话框
+// File selection dialog
 ipcMain.handle('select-directory', async (event) => {
   try {
     if (!mainWindow) {
-      console.error('主窗口未初始化');
+      console.error('Main window not initialized');
       return { canceled: true, error: '主窗口未初始化' };
     }
     
@@ -286,22 +256,17 @@ ipcMain.handle('select-directory', async (event) => {
   }
 });
 
-// 检查文件夹是否为空
 ipcMain.handle('check-folder-empty', async (event, folderPath) => {
   try {
     if (!folderPath) {
       return { success: false, error: '文件夹路径为空' };
     }
-    
-    // 检查路径是否存在
     try {
       await fs.access(folderPath);
     } catch (err) {
-      // 路径不存在，认为是空的
       return { success: true, isEmpty: true, exists: false, fileCount: 0 };
     }
     
-    // 读取文件夹内容
     const files = await fs.readdir(folderPath);
     const fileCount = files.length;
     const isEmpty = fileCount === 0;
@@ -313,7 +278,7 @@ ipcMain.handle('check-folder-empty', async (event, folderPath) => {
       exists: true,
       isEmpty: isEmpty,
       fileCount: fileCount,
-      files: files.slice(0, 10) // 只返回前 10 个文件名用于提示
+      files: files.slice(0, 10)
     };
   } catch (error) {
     console.error('[FolderCheck] 检查失败:', error);
@@ -321,7 +286,6 @@ ipcMain.handle('check-folder-empty', async (event, folderPath) => {
   }
 });
 
-// 检查文件是否存在
 ipcMain.handle('check-file-exists', async (event, filePath) => {
   try {
     if (!filePath) {
@@ -330,19 +294,17 @@ ipcMain.handle('check-file-exists', async (event, filePath) => {
     
     try {
       await fs.access(filePath);
-      console.log(`[FileCheck] ✓ 文件存在：${filePath}`);
+      console.log(`[FileCheck] 文件存在：${filePath}`);
       return { success: true, exists: true, path: filePath };
     } catch (err) {
-      console.log(`[FileCheck] ❌ 文件不存在：${filePath}`);
+      console.log(`[FileCheck]文件不存在：${filePath}`);
       return { success: true, exists: false };
     }
   } catch (error) {
-    console.error('[FileCheck] ❌ 检查失败:', error);
+    console.error('[FileCheck]检查失败:', error);
     return { success: false, error: error.message };
   }
 });
-
-// ✅ 新增：获取项目配置
 ipcMain.handle('get-project-config', async (event, projectId) => {
   try {
     console.log('[IPC] 获取项目配置:', projectId);
@@ -351,18 +313,17 @@ ipcMain.handle('get-project-config', async (event, projectId) => {
       return { success: false, error: '项目 ID 为空' };
     }
     
-    // 从 projectManager 获取项目配置
     const config = await projectManager.getProjectConfig(projectId);
     
     if (config) {
-      console.log('[IPC] ✓ 项目配置加载成功:', projectId);
+      console.log('[IPC] 项目配置加载成功:', projectId);
       return { success: true, data: config };
     } else {
-      console.warn('[IPC] ⚠️ 项目配置不存在:', projectId);
+      console.warn('[IPC] 项目配置不存在:', projectId);
       return { success: false, error: '项目配置不存在' };
     }
   } catch (error) {
-    console.error('[IPC] ❌ 获取项目配置失败:', error);
+    console.error('[IPC] 获取项目配置失败:', error);
     return { success: false, error: error.message };
   }
 });
@@ -370,7 +331,7 @@ ipcMain.handle('get-project-config', async (event, projectId) => {
 ipcMain.handle('select-file', async (event, options = {}) => {
   try {
     if (!mainWindow) {
-      console.error('主窗口未初始化');
+      console.error('Main window not initialized');
       return { canceled: true, error: '主窗口未初始化' };
     }
     
@@ -388,49 +349,44 @@ ipcMain.handle('select-file', async (event, options = {}) => {
     return { canceled: true, error: error.message };
   }
 });
-
-// 存储当前选中的 GPU 索引
+  
+// Current selected GPU index
 let currentSelectedGpuIndex = -1;
 
-// 存储当前训练进程
+// Storage for current training process
 let trainingProcess = null;
 let bakingProcess = null;
 let conversionProcess = null;
-let conversionCancelled = false; // 标记转换是否被用户取消
+let conversionCancelled = false; // Mark conversion as cancelled by user
 
-// 当前正在训练的项目 ID
+// Current training project ID
 let currentTrainingProjectId = null;
 
-// 训练任务队列管理
+// Training task queue management
 const trainingQueue = [];
-let isTrainingActive = false; // 标记是否有训练正在进行
+let isTrainingActive = false; // Mark if there is a training active 
 
-// 从队列中启动下一个训练任务
+// Start the next training task from the queue
 async function startNextTrainingTask() {
   if (trainingQueue.length === 0 || isTrainingActive) {
     return;
   }
   
   isTrainingActive = true;
-  const nextTask = trainingQueue.shift(); // 获取第一个任务
+  const nextTask = trainingQueue.shift(); 
   
   try {
-    console.log('[Queue] 启动队列中的下一个任务:', nextTask.projectName);
-    
-    // 更新项目状态为训练中
+    console.log('[Queue] Starting next task in queue:', nextTask.projectName);
     if (nextTask.projectId) {
       await projectManager.updateProjectStatus(nextTask.projectId, 'training');
       currentTrainingProjectId = nextTask.projectId;
     }
     
-    // 通知前端任务开始
     mainWindow.webContents.send('training-queue-update', {
       type: 'task-started',
       projectId: nextTask.projectId,
       projectName: nextTask.projectName
     });
-    
-    // 执行实际的训练启动逻辑（直接在这里调用原逻辑）
     await startTrainingProcess(nextTask.config, nextTask.projectId);
   } catch (error) {
     console.error('[Queue] 启动队列任务失败:', error);
@@ -438,18 +394,18 @@ async function startNextTrainingTask() {
       await projectManager.updateProjectStatus(nextTask.projectId, 'error');
     }
     isTrainingActive = false;
-    startNextTrainingTask(); // 尝试启动下一个
+    startNextTrainingTask(); 
   }
 }
 
-// 设置选中 GPU 索引
+// Set selected GPU index
 ipcMain.handle('set-selected-gpu-index', async (event, index) => {
   currentSelectedGpuIndex = index;
-  console.log(`设置选中 GPU 索引：${index}`);
+  console.log(`Set selected GPU index: ${index}`);
   return { success: true };
 });
 
-// 训练相关 IPC 处理
+// Training related IPC handling
 ipcMain.handle('start-training', async (event, config) => {
   try {
     const { 
@@ -457,13 +413,12 @@ ipcMain.handle('start-training', async (event, config) => {
       sourcePath, 
       iterations, 
       eval: evalMode, 
-      gamma,   // 训练时使用的参数（Stage1 时为 false）
-      indirect,  // 训练时使用的参数（Stage1 时为 false）
+      gamma,
+      indirect,
       checkpoint, 
       resolution, 
       imageSubdir,
       projectName,
-      // 新增：提取用户的真实参数
       userGamma,
       userIndirect,
       userCheckpoint,
@@ -472,16 +427,11 @@ ipcMain.handle('start-training', async (event, config) => {
       userOcclusion
     } = config;
     
-    // 创建项目（如果提供了项目名称）
-    // 注意：如果是 Stage2（有 checkpoint），不创建新项目，而是更新现有项目
     let projectId = config.projectId || null;
     let projectConfigFile = null;
     
     if (projectName && !config.checkpoint) {
-      // Stage1: 创建新项目
-      console.log('[Training] 创建新项目:', projectName);
       
-      // 关键：使用用户的真实参数保存，而不是训练时的固定参数
       const saveGamma = (userGamma !== undefined) ? userGamma : gamma;
       const saveIndirect = (userIndirect !== undefined) ? userIndirect : indirect;
       const saveCheckpoint = (userCheckpoint !== undefined) ? userCheckpoint : checkpoint;
@@ -499,12 +449,12 @@ ipcMain.handle('start-training', async (event, config) => {
         totalIterations: iterations,
         resolution,
         evalMode,
-        gamma: saveGamma,  // ✅ 使用用户的真实选择
-        indirect: saveIndirect,  // ✅ 使用用户的真实选择
+        gamma: saveGamma, 
+        indirect: saveIndirect,
         bound: saveBound,
         occluRes: saveOccluRes,
         occlusion: saveOcclusion,
-        checkpoint: saveCheckpoint  // ✅ 使用用户的真实 checkpoint
+        checkpoint: saveCheckpoint
       });
       
       if (projectResult.success) {
@@ -516,7 +466,6 @@ ipcMain.handle('start-training', async (event, config) => {
         console.warn('[Training] 项目创建失败，继续训练:', projectResult.error);
       }
     } else if (projectId && config.checkpoint) {
-      // Stage2: 更新现有项目阶段为 stage2
       console.log('[Training] Stage2 训练，更新现有项目:', projectId);
       try {
         await projectManager.updateProjectStage(projectId, 'stage2');
@@ -527,23 +476,17 @@ ipcMain.handle('start-training', async (event, config) => {
       }
     }
     
-    // 实现队列逻辑：如果有训练正在进行，将任务加入队列
     if (isTrainingActive && trainingProcess) {
       console.log('[Queue] 训练正在进行中，将任务加入队列');
-      
-      // 将任务加入队列
       trainingQueue.push({
         config,
         projectId,
         projectName: projectName || '未命名'
       });
-      
-      // 更新项目状态为等待中
+    
       if (projectId) {
         await projectManager.updateProjectStatus(projectId, 'waiting');
       }
-      
-      // 通知前端任务已进入队列
       mainWindow.webContents.send('training-queue-update', {
         type: 'task-queued',
         projectId,
@@ -559,13 +502,13 @@ ipcMain.handle('start-training', async (event, config) => {
       };
     }
         
-    // 检查数据集格式是否需要转换
+    // Check if dataset format needs conversion
     mainWindow.webContents.send('training-output', { 
       type: 'stdout', 
       data: '\n========== 数据集格式检查 ==========\n' 
     });
     
-    // 检查关键目录是否存在
+    // Check if key directories exist
     const sparsePath = path.join(sourcePath, 'sparse/0');
     const imagesPath = path.join(sourcePath, 'images');
     
@@ -586,11 +529,9 @@ ipcMain.handle('start-training', async (event, config) => {
         data: '开始执行 python convert.py -s ' + sourcePath + '\n\n' 
       });
       
-      // 准备转换脚本参数
       const convertScriptPath = path.join(__dirname, '../../tools/gaussian-splatting/convert.py');
       const convertArgs = ['-s', sourcePath];
       
-      // 验证脚本文件是否存在
       const scriptExists = await fs.access(convertScriptPath).then(() => true).catch(() => false);
       if (!scriptExists) {
         throw new Error(`找不到转换脚本：${convertScriptPath}`);
@@ -601,13 +542,11 @@ ipcMain.handle('start-training', async (event, config) => {
         data: `转换脚本：${convertScriptPath}\n` 
       });
       
-      // 运行转换脚本 - 只执行 python convert.py -s <filedir>
       const convertProcess = envManager.runPythonScript(convertScriptPath, convertArgs, {
         cwd: path.join(__dirname, '../../tools/gaussian-splatting'),
         env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
       });
       
-      // 等待转换完成
       await new Promise((resolve, reject) => {
         convertProcess.stdout.on('data', (data) => {
           const output = data.toString();
@@ -651,14 +590,12 @@ ipcMain.handle('start-training', async (event, config) => {
       });
     }
     
-    // 构建命令参数
     const args = [
       '-m', modelPath,
       '-s', sourcePath,
       '--iterations', iterations.toString()
     ];
     
-    // 添加图片子目录参数
     if (imageSubdir && imageSubdir !== 'images') {
       args.push('-i', imageSubdir);
     }
@@ -667,70 +604,52 @@ ipcMain.handle('start-training', async (event, config) => {
     if (gamma) args.push('--gamma');
     if (indirect) args.push('--indirect');
     
-    // 处理分辨率参数
-    // 根据实际使用的 imageSubdir 和 resolution 决定 -r 参数
-    // - 如果使用 images 目录（原图），-r = resolution（完整的压缩比例）
-    // - 如果使用 images_X 目录（已压缩），-r = resolution / X（二次压缩）
+    // Handle resolution parameter
     let finalResolutionParam = null;
     if (resolution && resolution > 1) {
       finalResolutionParam = resolution;
           
-      // 如果使用了预压缩目录，需要调整 -r 参数
       if (imageSubdir === 'images_2' && resolution === 2) {
-        // 1/2 分辨率 + images_2 目录：不需要额外压缩
         finalResolutionParam = 1;
       } else if (imageSubdir === 'images_4') {
         if (resolution === 4) {
-          // 1/4 分辨率 + images_4 目录：不需要额外压缩
           finalResolutionParam = 1;
         } else if (resolution === 8) {
-          // 1/8 分辨率 + images_4 目录：需要再压缩 2 倍
           finalResolutionParam = 2;
         } else if (resolution === 16) {
-          // 1/16 分辨率 + images_4 目录：需要再压缩 4 倍
           finalResolutionParam = 4;
         }
       } else if (imageSubdir === 'images_8') {
         if (resolution === 8) {
-          // 1/8 分辨率 + images_8 目录：不需要额外压缩
           finalResolutionParam = 1;
         } else if (resolution === 16) {
-          // 1/16 分辨率 + images_8 目录：需要再压缩 2 倍
           finalResolutionParam = 2;
         }
       }
-      // 其他情况（使用 images 目录）：finalResolutionParam = resolution
-          
       if (finalResolutionParam > 1) {
         args.push('-r', finalResolutionParam.toString());
       }
     }
     
-    // 输出调试信息
     console.log(`分辨率设置：目标=${resolution}, imageSubdir="${imageSubdir}", 实际 -r 参数=${finalResolutionParam || '未设置'}`);
     mainWindow.webContents.send('training-output', { 
       type: 'stdout', 
-      data: `📊 分辨率配置：目标 1/${resolution} | 使用目录：${imageSubdir} | -r 参数：${finalResolutionParam || '1(不压缩)'}\n` 
+      data: `分辨率配置：目标 1/${resolution} | 使用目录：${imageSubdir} | -r 参数：${finalResolutionParam || '1(不压缩)'}\n` 
     });
     
     if (checkpoint) {
       args.push('--start_checkpoint', checkpoint);
     }
+    console.log('Starting training process with command:', envManager.pythonPath, args.join(' '));
     
-   console.log('启动训练进程:', envManager.pythonPath, args.join(' '));
-    
-    // 标记训练已激活
     isTrainingActive = true;
     
-    // 构建完整的命令：先激活 conda 环境，再执行 Python 脚本
    const pythonScriptPath = path.join(__dirname, '../../GS-IR/train.py');
    const cwd = path.join(__dirname, '../../GS-IR');
     
   if (process.platform === 'win32') {
-        // Windows: 使用 PowerShell 执行 conda activate && python train.py
     const ninjaPath = process.env.NINJA_PATH || path.join(path.dirname(envManager.pythonPath), 'Scripts\\ninja.exe');
     const ninjaDir = path.dirname(ninjaPath);
-    // 将 Ninja 目录添加到 PATH，并设置 NINJA_PATH 环境变量
     const fullCommand = `conda activate gsir;$env:PATH='${ninjaDir};' + $env:PATH;$env:NINJA_PATH='${ninjaPath}'; & '${envManager.pythonPath}' '${pythonScriptPath}' ${args.join(' ')}`;
      console.log('执行完整命令:', fullCommand);
         console.log('Ninja 路径:', ninjaPath);
@@ -739,7 +658,6 @@ ipcMain.handle('start-training', async (event, config) => {
          env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
         });
     } else {
-        // Unix/Linux/macOS: 使用 bash -c "source activate gsir && python train.py ..."
      const fullCommand = `cd '${cwd}' && source activate gsir && '${envManager.pythonPath}' '${pythonScriptPath}' ${args.join(' ')}`;
      console.log('执行完整命令:', fullCommand);
         
@@ -752,16 +670,12 @@ ipcMain.handle('start-training', async (event, config) => {
       const output = data.toString();
       console.log('训练输出:', output);
       mainWindow.webContents.send('training-output', { type: 'stdout', data: output });
-      
-      // 解析 TRAINING_STATE_UPDATE 消息并更新项目状态
       if (projectId && output.includes('TRAINING_STATE_UPDATE:')) {
         try {
           const jsonMatch = output.match(/TRAINING_STATE_UPDATE:\s*(\{.+\})/);
           if (jsonMatch) {
             const stateData = JSON.parse(jsonMatch[1]);
             console.log('[Training] 解析到状态更新:', stateData);
-            
-            // 更新项目状态（注意：每 100 次迭代时 psnr/ssim 为 null）
             projectManager.updateProject(projectId, {
               currentIteration: stateData.iter,
               loss: stateData.loss,
@@ -782,23 +696,16 @@ ipcMain.handle('start-training', async (event, config) => {
         }
       }
       
-      // ⚠️ 解析评估数据（每 1000 次迭代）
-      // 注意：Python 会输出 test 和 train 两次评估，我们只解析一次
+      // Analyze and evaluate the data
       if (projectId) {
-        // 尝试匹配 test 或 train 的评估行
         const evalTestMatch = output.match(/\[ITER\s+(\d+)\]\s+Evaluating\s+test:\s+L1\s+([\d.]+)\s+PSNR:\s*([\d.]+)\s+SSIM\s+([\d.]+)/);
         const evalTrainMatch = output.match(/\[ITER\s+(\d+)\]\s+Evaluating\s+train:\s+L1\s+([\d.]+)\s+PSNR:\s*([\d.]+)\s+SSIM\s+([\d.]+)/);
-        
-        // 解析 EVAL_TEST_* 和 EVAL_TRAIN_* 指标
         const evalTestL1Match = output.match(/EVAL_TEST_L1:\s*([\d.]+)/);
         const evalTestPsnrMatch = output.match(/EVAL_TEST_PSNR:\s*([\d.]+)/);
         const evalTestSsimMatch = output.match(/EVAL_TEST_SSIM:\s*([\d.]+)/);
-        
         const evalTrainL1Match = output.match(/EVAL_TRAIN_L1:\s*([\d.]+)/);
         const evalTrainPsnrMatch = output.match(/EVAL_TRAIN_PSNR:\s*([\d.]+)/);
         const evalTrainSsimMatch = output.match(/EVAL_TRAIN_SSIM:\s*([\d.]+)/);
-        
-        // ⚠️ 优先使用 train 评估（更准确），如果没有则使用 test 评估
         const evalMatch = evalTrainMatch || evalTestMatch;
         const evalType = evalTrainMatch ? 'train' : (evalTestMatch ? 'test' : null);
         
@@ -808,7 +715,6 @@ ipcMain.handle('start-training', async (event, config) => {
           const psnr = evalMatch ? parseFloat(evalMatch[3]) : null;
           const ssim = evalMatch ? parseFloat(evalMatch[4]) : null;
           
-          // 从 EVAL_*_L1 等提取评估 L1（独立指标）
           const evalL1 = evalTrainL1Match ? parseFloat(evalTrainL1Match[1]) : 
                         (evalTestL1Match ? parseFloat(evalTestL1Match[1]) : null);
           const evalPsnr = evalTrainPsnrMatch ? parseFloat(evalTrainPsnrMatch[1]) :
@@ -816,37 +722,28 @@ ipcMain.handle('start-training', async (event, config) => {
           const evalSsim = evalTrainSsimMatch ? parseFloat(evalTrainSsimMatch[1]) :
                           (evalTestSsimMatch ? parseFloat(evalTestSsimMatch[1]) : null);
           
-          // ⚠️ 只在第一次解析到时处理（避免重复）
           if (iter !== null && l1 !== null) {
             console.log(`[Training] ✓ 解析到${evalType ? evalType.toUpperCase() : ''}评估数据 - iter: ${iter}, L1: ${l1}, PSNR: ${psnr}, SSIM: ${ssim}`);
-            
-            // 更新项目状态，包含 PSNR、SSIM 和评估 L1
-            // ⚠️ 注意：loss 字段应该已经在 TRAINING_STATE_UPDATE 中设置过了
-            // 这里只更新 PSNR、SSIM 和 Eval L1
             const projectUpdateData = {
               currentIteration: iter,
               psnr: psnr,
               ssim: ssim,
-              evalL1: evalL1,  // 评估 L1（单独保存）
-              evalL1Type: evalType,  // 'test' 或 'train'
+              evalL1: evalL1, 
+              evalL1Type: evalType, 
               status: 'training'
-              // ✅ 注意：不包含 loss 字段，避免覆盖常规训练的 Loss
             };
             
             projectManager.updateProject(projectId, projectUpdateData).then(result => {
               if (result.success) {
                 console.log('[Training] ✓ 评估数据已保存');
-                
-                // 同时发送一个补充的 TRAINING_STATE_UPDATE 给前端
-                // ⚠️ 注意：使用闭包中的变量 evalL1 和 l1Type
                 mainWindow.webContents.send('training-output', {
                   type: 'eval-update',
                   data: {
                     iter,
-                    loss: null,  // ✅ 明确设置为 null，不使用评估 L1
+                    loss: null,
                     psnr,
                     ssim,
-                    evalL1: evalL1,  // 评估 L1
+                    evalL1: evalL1,
                     evalL1Type: evalType
                   }
                 });
@@ -870,7 +767,6 @@ ipcMain.handle('start-training', async (event, config) => {
       mainWindow.webContents.send('training-output', { type: 'close', code });
       trainingProcess = null;
       
-      // 更新项目状态为完成
       if (projectId) {
         const finalStatus = code === 0 ? 'completed' : 'error';
         projectManager.updateProject(projectId, {
@@ -880,7 +776,6 @@ ipcMain.handle('start-training', async (event, config) => {
           currentTrainingProjectId = null;
           isTrainingActive = false;
           
-          // 启动队列中的下一个任务
           console.log('[Queue] 当前训练结束，检查队列...');
           startNextTrainingTask();
         }).catch(err => {
@@ -904,19 +799,15 @@ ipcMain.handle('start-training', async (event, config) => {
 ipcMain.handle('start-baking', async (event, config) => {
   try {
     const { modelPath, checkpoint, bound, occluRes, occlusion, projectId } = config;
-      
-    // 如果有 projectId，更新项目阶段为 baking
     if (projectId) {
     try {
         await projectManager.updateProjectStage(projectId, 'baking');
       console.log(`[Baking] 项目 ${projectId} 阶段已更新为 baking`);
       } catch (stageError) {
       console.error('[Baking] 更新项目阶段失败:', stageError);
-        // 不阻断后续流程
       }
     }
     
-    // 构建命令参数
     const args = [
       '-m', modelPath,
       '--checkpoint', checkpoint,
@@ -927,7 +818,6 @@ ipcMain.handle('start-baking', async (event, config) => {
     
     console.log('启动烘焙进程:', envManager.pythonPath, args.join(' '));
     
-    // 使用环境管理器运行 Python 脚本
     bakingProcess = envManager.runPythonScript(
       path.join(__dirname, '../../GS-IR/baking.py'),
       args,
@@ -939,35 +829,27 @@ ipcMain.handle('start-baking', async (event, config) => {
       console.log('烘焙输出:', output);
       mainWindow.webContents.send('baking-output', { type: 'stdout', data: output });
       
-      // ✅ 新增：解析 Baking 进度并保存状态
       if (projectId && output) {
         try {
-          // 解析进度百分比
           const progressMatch = output.match(/(\d+)%/);
           if (progressMatch) {
             const progress = parseInt(progressMatch[1]);
             console.log(`[Baking] 解析到进度：${progress}%`);
-            
-            // 更新项目状态
             projectManager.updateProject(projectId, {
-              currentIteration: progress,  // 使用进度作为迭代次数
+              currentIteration: progress, 
               status: 'baking'
             }).then(result => {
               if (result.success) {
-                console.log('[Baking] ✓ 进度已保存');
+                console.log('[Baking] 进度已保存');
               } else {
                 console.warn('[Baking] 进度保存失败:', result.error);
               }
             });
           }
-          
-          // 解析完成消息
           if (output.includes('save occlusion volumes') || output.includes('occlusion_volumes.pth')) {
-            console.log('[Baking] ✓ 检测到 Baking 完成');
-            
-            // 更新项目阶段为 stage2（准备进入下一阶段）
+            console.log('[Baking] 检测到 Baking 完成');
             projectManager.updateProjectStage(projectId, 'stage2').then(() => {
-              console.log('[Baking] ✓ 项目阶段已更新为 stage2');
+              console.log('[Baking] 项目阶段已更新为 stage2');
             });
           }
         } catch (error) {
@@ -985,17 +867,14 @@ ipcMain.handle('start-baking', async (event, config) => {
     bakingProcess.on('close', (code) => {
       console.log(`烘焙进程退出，代码：${code}`);
       mainWindow.webContents.send('baking-output', { type: 'close', code });
-      
-      // ✅ 新增：Baking 完成后更新项目状态
       if (projectId) {
         if (code === 0) {
-          // 成功完成
           projectManager.updateProject(projectId, {
             status: 'completed',
-            stage: 'stage2'  // 自动进入 Stage2 阶段
+            stage: 'stage2'
           }).then(result => {
             if (result.success) {
-              console.log('[Baking] ✓ 项目状态已更新为 completed');
+              console.log('[Baking] 项目状态已更新为 completed');
             }
           });
         } else {
@@ -1004,7 +883,7 @@ ipcMain.handle('start-baking', async (event, config) => {
             status: 'error'
           }).then(result => {
             if (result.success) {
-              console.log('[Baking] ✓ 项目状态已更新为 error');
+              console.log('[Baking] 项目状态已更新为 error');
             }
           });
         }
@@ -1022,8 +901,6 @@ ipcMain.handle('start-baking', async (event, config) => {
 
 ipcMain.handle('stop-training', async () => {
   try {
-    console.log('===== 收到停止训练请求 =====');
-    
     if (trainingProcess) {
       const pid = trainingProcess.pid;
       console.log('[停止训练] 当前训练进程 PID:', pid);
@@ -1032,20 +909,14 @@ ipcMain.handle('stop-training', async () => {
         exitCode: trainingProcess.exitCode,
         signalCode: trainingProcess.signalCode
       });
-      
-      // Windows 上使用 taskkill 强制终止进程树
       if (process.platform === 'win32') {
         const { spawn } = require('child_process');
-        
         console.log('[停止训练] Windows 平台，使用 taskkill 终止进程树...');
-        
         return new Promise((resolve) => {
           try {
             const taskkill = spawn('taskkill', ['/pid', pid.toString(), '/f', '/t']);
-            
             let stdout = '';
             let stderr = '';
-            
             taskkill.stdout.on('data', (data) => {
               const output = data.toString();
               stdout += output;
@@ -1067,7 +938,6 @@ ipcMain.handle('stop-training', async () => {
                 resolve({ success: true, message: '训练进程已停止' });
               } else {
                 console.error('[停止训练] taskkill 失败，代码:', code, stderr);
-                // 尝试备用方案：直接 kill
                 try {
                   trainingProcess.kill('SIGKILL');
                   console.log('[停止训练] 使用 SIGKILL 备用方案成功');
@@ -1082,7 +952,6 @@ ipcMain.handle('stop-training', async () => {
             
             taskkill.on('error', (err) => {
               console.error('[taskkill] 进程启动失败:', err);
-              // 尝试备用方案
               try {
                 trainingProcess.kill('SIGKILL');
                 console.log('[停止训练] 使用 SIGKILL 备用方案成功');
@@ -1092,8 +961,6 @@ ipcMain.handle('stop-training', async () => {
                 resolve({ success: false, error: err.message });
               }
             });
-            
-            // 设置超时，防止 taskkill 挂起
             setTimeout(() => {
               console.warn('[停止训练] taskkill 超时 5 秒，强制清理...');
               try {
@@ -1111,7 +978,6 @@ ipcMain.handle('stop-training', async () => {
           }
         });
       } else {
-        // Unix/Linux/macOS 平台
         console.log('[停止训练] Unix 平台，使用 SIGKILL 信号...');
         trainingProcess.kill('SIGKILL');
         trainingProcess = null;
@@ -1131,8 +997,6 @@ ipcMain.handle('stop-training', async () => {
 
 ipcMain.handle('stop-baking', async () => {
   try {
-    console.log('===== 收到停止烘焙请求 =====');
-    
     if (bakingProcess) {
       const pid = bakingProcess.pid;
       console.log('[停止烘焙] 当前烘焙进程 PID:', pid);
@@ -1141,8 +1005,6 @@ ipcMain.handle('stop-baking', async () => {
         exitCode: bakingProcess.exitCode,
         signalCode: bakingProcess.signalCode
       });
-      
-      // Windows 上使用 taskkill 强制终止进程树
       if (process.platform === 'win32') {
         const { spawn } = require('child_process');
         
@@ -1171,19 +1033,18 @@ ipcMain.handle('stop-baking', async () => {
               console.log('[taskkill] 进程退出，代码:', code);
               
               if (code === 0) {
-                console.log('[停止烘焙] ✓ 成功终止烘焙进程及其子进程');
+                console.log('[停止烘焙] 成功终止烘焙进程及其子进程');
                 bakingProcess = null;
                 resolve({ success: true, message: '烘焙进程已停止' });
               } else {
-                console.error('[停止烘焙] ✗ taskkill 失败，代码:', code, stderr);
-                // 尝试备用方案：直接 kill
+                console.error('[停止烘焙] taskkill 失败，代码:', code, stderr);
                 try {
                   bakingProcess.kill('SIGKILL');
                   console.log('[停止烘焙] 使用 SIGKILL 备用方案成功');
                   bakingProcess = null;
                   resolve({ success: true, message: '烘焙进程已通过备用方案停止' });
                 } catch (killError) {
-                  console.error('[停止烘焙] ✗ 所有终止方法都失败:', killError);
+                  console.error('[停止烘焙] 所有终止方法都失败:', killError);
                   resolve({ success: false, error: `终止进程失败：${stderr || killError.message}` });
                 }
               }
@@ -1191,7 +1052,6 @@ ipcMain.handle('stop-baking', async () => {
             
             taskkill.on('error', (err) => {
               console.error('[taskkill] 进程启动失败:', err);
-              // 尝试备用方案
               try {
                 bakingProcess.kill('SIGKILL');
                 console.log('[停止烘焙] 使用 SIGKILL 备用方案成功');
@@ -1202,9 +1062,8 @@ ipcMain.handle('stop-baking', async () => {
               }
             });
             
-            // 设置超时，防止 taskkill 挂起
             setTimeout(() => {
-              console.warn('[停止烘焙] ⚠ taskkill 超时 5 秒，强制清理...');
+              console.warn('[停止烘焙] taskkill 超时 5 秒，强制清理...');
               try {
                 bakingProcess.kill('SIGKILL');
                 bakingProcess = null;
@@ -1220,19 +1079,18 @@ ipcMain.handle('stop-baking', async () => {
           }
         });
       } else {
-        // Unix/Linux/macOS 平台
         console.log('[停止烘焙] Unix 平台，使用 SIGKILL 信号...');
         bakingProcess.kill('SIGKILL');
         bakingProcess = null;
-        console.log('[停止烘焙] ✓ 烘焙进程已停止');
+        console.log('[停止烘焙] 烘焙进程已停止');
         return { success: true };
       }
     } else {
-      console.warn('[停止烘焙] ⚠ 没有正在运行的烘焙进程');
+      console.warn('[停止烘焙]没有正在运行的烘焙进程');
       return { success: false, error: '没有正在运行的烘焙进程' };
     }
   } catch (error) {
-    console.error('[停止烘焙] ✗ 发生异常:', error);
+    console.error('[停止烘焙] 发生异常:', error);
     console.error('[停止烘焙] 错误堆栈:', error.stack);
     return { success: false, error: error.message };
   }
@@ -1243,8 +1101,6 @@ ipcMain.handle('stop-conversion', async () => {
     if (conversionProcess) {
       const pid = conversionProcess.pid;
       console.log('正在停止转换进程，PID:', pid);
-      
-      // Windows 上使用 taskkill 强制终止进程树
       if (process.platform === 'win32') {
         const { spawn } = require('child_process');
         spawn('taskkill', ['/pid', pid.toString(), '/f', '/t']);
@@ -1252,7 +1108,7 @@ ipcMain.handle('stop-conversion', async () => {
         conversionProcess.kill('SIGKILL');
       }
       
-      conversionCancelled = true; // 标记为用户主动取消
+      conversionCancelled = true;
       conversionProcess = null;
       console.log('转换进程已停止');
       return { success: true };
@@ -1264,7 +1120,6 @@ ipcMain.handle('stop-conversion', async () => {
   }
 });
 
-// 停止环境安装
 ipcMain.handle('stop-installation', async () => {
   try {
     const stopped = await envManager.stopInstallation();
@@ -1274,16 +1129,13 @@ ipcMain.handle('stop-installation', async () => {
   }
 });
 
-// 获取最新渲染图像
+// Get the latest rendered images
 ipcMain.handle('get-latest-rendered-image', async (event, modelPath) => {
   try {
-    // 检查路径是否存在
     const dirExists = await fs.access(modelPath).then(() => true).catch(() => false);
     if (!dirExists) {
       return { success: false, error: '输出目录不存在' };
     }
-    
-    // 查找 point 文件夹中的渲染图像
     const pointPath = path.join(modelPath, 'point');
     const pointDirExists = await fs.access(pointPath).then(() => true).catch(() => false);
     
@@ -1292,7 +1144,6 @@ ipcMain.handle('get-latest-rendered-image', async (event, modelPath) => {
       const pngFiles = files.filter(f => f.endsWith('.png') && !f.includes('depth'));
       
       if (pngFiles.length > 0) {
-        // 按修改时间排序，获取最新的图像
         const filesWithStats = await Promise.all(
           pngFiles.map(async (file) => {
             const filePath = path.join(pointPath, file);
@@ -1303,15 +1154,12 @@ ipcMain.handle('get-latest-rendered-image', async (event, modelPath) => {
         
         filesWithStats.sort((a, b) => b.mtime - a.mtime);
         const latestFile = filesWithStats[0].filePath;
-        
         console.log('[图片加载] 找到最新渲染图:', latestFile);
-        
-        // 读取文件并转换为 Base64
+        // Read the file and convert it to Base64
         try {
           const imageData = await fs.readFile(latestFile);
           const base64Image = imageData.toString('base64');
           const dataUrl = `data:image/png;base64,${base64Image}`;
-          
           console.log('[图片加载] 图片已转换为 Base64，大小:', (imageData.length / 1024).toFixed(2), 'KB');
           
           return { 
@@ -1333,22 +1181,19 @@ ipcMain.handle('get-latest-rendered-image', async (event, modelPath) => {
   }
 });
 
-// 更新项目配置（实时自动保存）
+// Update project configuration
 ipcMain.handle('update-project-config', async (event, configData) => {
   try {
     const { projectId, config } = configData;
-    
-    // 验证必填字段
     if (!projectId) {
       return { success: false, error: '缺少 projectId' };
     }
     
-    // 调用 ProjectManager 更新配置
+    // Update project configuration
     const result = await projectManager.updateProjectConfig(projectId, config);
     
     if (result.success) {
       console.log(`[IPC] 项目配置已更新：${projectId}`);
-      // 通知所有窗口配置已更新
       mainWindow?.webContents.send('project-config-updated', {
         projectId,
         config
@@ -1362,7 +1207,6 @@ ipcMain.handle('update-project-config', async (event, configData) => {
   }
 });
 
-// 更新项目阶段
 ipcMain.handle('update-project-stage', async (event, data) => {
  try {
   const { projectId, stage } = data;
@@ -1384,7 +1228,7 @@ ipcMain.handle('update-project-stage', async (event, data) => {
  }
 });
 
-// 同步 sourcePath 字段到 projects.json
+// Sync sourcePath field to projects.json
 ipcMain.handle('sync-source-path-to-projects', async () => {
   try {
     const result = await projectManager.syncSourcePathToProjects();
@@ -1395,7 +1239,7 @@ ipcMain.handle('sync-source-path-to-projects', async () => {
   }
 });
 
-// 启动 Python 脚本（使用 conda 环境）
+// Spawn Python process
 ipcMain.handle('spawn-python-process', async (event, config) => {
   try {
     const { script, args = [], cwd = null, useConda = false, condaEnv = null, scriptDir = null } = config;
@@ -1403,27 +1247,20 @@ ipcMain.handle('spawn-python-process', async (event, config) => {
     if (!script) {
       return { success: false, error: '缺少 script 参数' };
     }
-    
-    // 构建命令
     let command;
     let spawnArgs = [];
     let fullScriptPath = script;
-    
-    // 如果脚本不是绝对路径，需要拼接脚本所在目录
     const path = require('path');
     if (!path.isAbsolute(script)) {
-      // 优先使用 scriptDir，如果没有则使用 __dirname（electron 目录）
       const baseDir = scriptDir || __dirname;
       fullScriptPath = path.join(baseDir, script);
       console.log(`[IPC] 解析脚本路径：${fullScriptPath}`);
     }
     
     if (useConda && condaEnv) {
-      // 使用 conda run 运行 Python 脚本
       command = 'conda';
       spawnArgs = ['run', '-n', condaEnv, 'python', fullScriptPath, ...args];
     } else {
-      // 直接使用 python 运行
       command = 'python';
       spawnArgs = [fullScriptPath, ...args];
     }
@@ -1432,32 +1269,24 @@ ipcMain.handle('spawn-python-process', async (event, config) => {
     if (cwd) {
       console.log(`[IPC] 工作目录：${cwd}`);
     }
-    
-    // 启动子进程
     const { spawn } = require('child_process');
     const options = cwd ? { cwd } : {};
     const childProcess = spawn(command, spawnArgs, options);
-    
-    // ✅ 监听 Python 输出，检测 GUI 初始化完成信号
     let isReady = false;
     let isTimeout = false;
-    
-    // ✅ 新增：轮询检测信号文件
     const modelPath = cwd || '';
     const signalFilePath = modelPath ? `${modelPath}\\.luminags\\gui_ready.signal` : null;
     let signalFileDetected = false;
     
     const readyPromise = new Promise((resolve) => {
-      // ✅ 启动信号文件轮询（每 500ms 检查一次）
       let signalCheckInterval = null;
       if (signalFilePath) {
         signalCheckInterval = setInterval(() => {
           if (signalFileDetected) return;
-          
           try {
             const fs = require('fs');
             if (fs.existsSync(signalFilePath)) {
-              console.log('[IPC] ✓ 检测到信号文件:', signalFilePath);
+              console.log('[IPC] 检测到信号文件:', signalFilePath);
               signalFileDetected = true;
               clearInterval(signalCheckInterval);
               clearTimeout(timeoutHandle);
@@ -1465,48 +1294,38 @@ ipcMain.handle('spawn-python-process', async (event, config) => {
               resolve({ ready: true, timeout: false });
             }
           } catch (error) {
-            // 忽略错误，继续轮询
           }
-        }, 500); // 每 500ms 检查一次
+        }, 500);
       }
       
-      // 超时保护：120 秒后自动认为超时（大模型可能需要更长时间）
       const timeoutHandle = setTimeout(() => {
         if (!isReady) {
-          console.log('[IPC] ⏰ 等待超时（120 秒）');
+          console.log('[IPC] 等待超时（120 秒）');
           isTimeout = true;
-          isReady = true; // 标记为就绪，但会抛出错误
+          isReady = true; 
           resolve({ ready: false, timeout: true });
           if (signalCheckInterval) clearInterval(signalCheckInterval);
         }
-      }, 120000); // ✅ 增加到 120 秒（2分钟）
+      }, 120000);
       
-      // 监听 stdout，检测加载完成信号（作为信号文件的备用方案）
       childProcess.stdout.on('data', (data) => {
         const output = data.toString();
         console.log(`[Python stdout]: ${output}`);
         
         if (!isReady && !signalFileDetected) {
-          // ✅ 检测关键信号（按优先级排序）：
-          // 1. "Loading Test Cameras" - 最早的信号！表示开始处理相机数据
-          // 2. "[RealtimeViewer] 模型加载完成" - 高斯模型已加载（精确匹配）
-          // 3. "模型加载完成" - 兼容其他格式
-          // 4. "100%" - 任意进度条完成
-          // 5. "GUI initialized" / "窗口已创建"
-          // 6. 其他进度信息
           if (output.includes('Loading Test Cameras') || 
               output.includes('[RealtimeViewer] 模型加载完成') ||
               output.includes('模型加载完成') ||
               output.includes('100%') ||
-              /\d+\.\d+it\/s/.test(output) ||  // 匹配 "9.53it/s" 这样的速度输出
+              /\d+\.\d+it\/s/.test(output) ||
               output.includes('GUI initialized') || 
               output.includes('窗口已创建') ||
-              output.includes('正在加载用户配置')) {  // 新增：检测配置加载
+              output.includes('正在加载用户配置')) {
             clearTimeout(timeoutHandle);
             if (signalCheckInterval) clearInterval(signalCheckInterval);
             isReady = true;
             console.log('[IPC] ✓ 检测到 GUI 初始化完成信号:', output.trim());
-            resolve({ ready: true, timeout: false }); // 正常就绪
+            resolve({ ready: true, timeout: false });
           }
         }
       });
@@ -1519,35 +1338,27 @@ ipcMain.handle('spawn-python-process', async (event, config) => {
         console.log(`[Python] 子进程退出，代码：${code}`);
         clearTimeout(timeoutHandle);
         if (!isReady) {
-          resolve(false); // 进程异常退出
+          resolve(false); 
         }
       });
     });
     
-    console.log(`[IPC] ✓ Python 进程启动成功，PID: ${childProcess.pid}`);
-    
-    // ✅ 等待 GUI 就绪信号
+    console.log(`[IPC] Python 进程启动成功，PID: ${childProcess.pid}`);
     const readyResult = await readyPromise;
-    
-    // ✅ 检查是否超时
     if (!readyResult.ready) {
-      console.error('[IPC] ❌ 加载超时（120 秒），准备终止 Python 进程');
-      
-      // 终止 Python 进程
+      console.error('[IPC] 加载超时，准备终止 Python 进程');
       try {
         childProcess.kill();
-        console.log('[IPC] ✓ Python 进程已终止');
       } catch (killError) {
         console.error('[IPC] 终止进程失败:', killError.message);
       }
-      
-      throw new Error('Python 程序加载超时（120 秒），请检查程序是否正常或尝试重新创建项目');
+      throw new Error('Python 程序加载超时，请检查程序是否正常或尝试重新创建项目');
     }
     
     return {
       success: true,
       pid: childProcess.pid,
-      timeout: readyResult.timeout // 返回是否超时
+      timeout: readyResult.timeout
     };
   } catch (error) {
     console.error('[IPC] 启动 Python 进程失败:', error);
@@ -1555,7 +1366,6 @@ ipcMain.handle('spawn-python-process', async (event, config) => {
   }
 });
 
-// 检查训练是否完成（检测 chkpnt40000.pth）
 ipcMain.handle('check-training-completion', async (event, projectId) => {
  try {
   if (!projectId) {
@@ -1566,7 +1376,6 @@ ipcMain.handle('check-training-completion', async (event, projectId) => {
   
   if (result.success && result.completed) {
    console.log(`[IPC] ✓ 检测到训练完成：${projectId}`);
-   // 通知前端项目已完成
    mainWindow.webContents.send('training-completed', { projectId });
   }
   
@@ -1576,8 +1385,6 @@ ipcMain.handle('check-training-completion', async (event, projectId) => {
   return { success: false, error: error.message };
  }
 });
-
-// 删除输出目录内容（保留目录本身）
 ipcMain.handle('delete-output-directory', async (event, outputPath) => {
   try {
     const fs = require('fs').promises;
@@ -1588,34 +1395,25 @@ ipcMain.handle('delete-output-directory', async (event, outputPath) => {
     if (!outputPath) {
       return { success: false, error: '输出路径为空' };
     }
-    
-    // 检查目录是否存在
     try {
       await fs.access(outputPath);
     } catch (err) {
       console.log(`[删除输出] 目录不存在：${outputPath}`);
       return { success: true, message: '目录不存在，无需删除' };
     }
-    
-    // 读取目录内容
     console.log(`[删除输出] 开始读取目录内容：${outputPath}`);
     const entries = await fs.readdir(outputPath, { withFileTypes: true });
-    
-    // 删除所有文件和子目录
     for (const entry of entries) {
       const fullPath = path.join(outputPath, entry.name);
       console.log(`[删除输出] 删除项：${fullPath}`);
-      
       if (entry.isDirectory()) {
-        // 递归删除子目录
         await fs.rm(fullPath, { recursive: true, force: true });
       } else {
-        // 删除文件
         await fs.unlink(fullPath);
       }
     }
     
-    console.log(`[删除输出] ✓ 成功清空目录内容：${outputPath}（保留目录本身）`);
+    console.log(`[删除输出] 成功清空目录内容：${outputPath}（保留目录本身）`);
     
     return { success: true, message: '目录内容已清空' };
   } catch (error) {
@@ -1624,7 +1422,6 @@ ipcMain.handle('delete-output-directory', async (event, outputPath) => {
   }
 });
 
-// 删除项目及其输出（仅清空目录内容，保留目录本身）
 ipcMain.handle('delete-project-and-output', async (event, data) => {
   try {
     const { projectId, outputPath } = data;
@@ -1634,18 +1431,12 @@ ipcMain.handle('delete-project-and-output', async (event, data) => {
     if (!projectId) {
       return { success: false, error: '缺少 projectId' };
     }
-    
-    // 1. 先清空输出目录内容（保留目录本身）
     if (outputPath) {
       try {
         const fs = require('fs').promises;
         const path = require('path');
-        
-        // 检查目录是否存在
         try {
           await fs.access(outputPath);
-          
-          // 读取并删除目录内容
           const entries = await fs.readdir(outputPath, { withFileTypes: true });
           for (const entry of entries) {
             const fullPath = path.join(outputPath, entry.name);
@@ -1655,7 +1446,7 @@ ipcMain.handle('delete-project-and-output', async (event, data) => {
               await fs.unlink(fullPath);
             }
           }
-          console.log(`[删除项目] ✓ 输出目录内容已清空：${outputPath}（保留目录本身）`);
+          console.log(`[删除项目] 输出目录内容已清空：${outputPath}（保留目录本身）`);
         } catch (err) {
           if (err.code !== 'ENOENT') {
             console.warn(`[删除项目] 清空输出目录失败：${err.message}`);
@@ -1668,11 +1459,10 @@ ipcMain.handle('delete-project-and-output', async (event, data) => {
       }
     }
     
-    // 2. 删除项目配置
     if (projectId) {
       const result = await projectManager.deleteProject(projectId);
       if (result.success) {
-        console.log(`[删除项目] ✓ 项目配置已删除：${projectId}`);
+        console.log(`[删除项目] 项目配置已删除：${projectId}`);
       } else {
         console.warn(`[删除项目] 删除项目配置失败：${result.error}`);
       }
@@ -1685,7 +1475,6 @@ ipcMain.handle('delete-project-and-output', async (event, data) => {
   }
 });
 
-// 保存训练完成的项目到项目列表
 ipcMain.handle('save-to-projects-list', async (event, data) => {
   try {
     const { projectId, thumbnailBase64 } = data;
@@ -1695,8 +1484,6 @@ ipcMain.handle('save-to-projects-list', async (event, data) => {
     if (!projectId) {
       return { success: false, error: '缺少 projectId' };
     }
-    
-    // 1. 加载项目配置
     const projectResult = await projectManager.loadProject(projectId);
     if (!projectResult.success) {
       return { success: false, error: projectResult.error };
@@ -1704,46 +1491,40 @@ ipcMain.handle('save-to-projects-list', async (event, data) => {
     
     const projectConfig = projectResult.data;
     console.log(`[保存项目] 项目配置：`, projectConfig);
-    
-    // 2. 保存缩略图（如果有）
     let thumbnailPath = null;
     if (thumbnailBase64) {
       try {
         const fs = require('fs');
         const path = require('path');
         
-        // 在项目输出目录的 .luminags 中保存缩略图
+        // thumbnail directory for project
         const luminagsDir = path.join(projectConfig.outputPath, '.luminags');
         await fs.promises.mkdir(luminagsDir, { recursive: true });
         
-        // 生成缩略图文件名
+        // generate thumbnail file name
         const thumbnailFileName = `thumbnail_${Date.now()}.png`;
         thumbnailPath = path.join(luminagsDir, thumbnailFileName);
         
-        // 解码并保存 Base64 图片
+        // decode and save Base64 image
         const base64Data = thumbnailBase64.replace(/^data:image\/png;base64,/, '');
         await fs.promises.writeFile(thumbnailPath, base64Data, 'base64');
         
-        console.log(`[保存项目] ✓ 缩略图已保存：${thumbnailPath}`);
+        console.log(`[保存项目] 缩略图已保存：${thumbnailPath}`);
       } catch (thumbError) {
         console.error('[保存项目] 保存缩略图失败:', thumbError);
-        // 不阻断后续流程
       }
     }
     
-    // 3. 更新项目状态为已完成
     await projectManager.updateProject(projectId, {
       status: 'completed'
     });
-    
-    // 4. 更新项目索引，添加缩略图路径
     const projectIndex = projectManager.projects.find(p => p.projectId === projectId);
     if (projectIndex) {
       projectIndex.thumbnailPath = thumbnailPath;
       await projectManager.saveProjects();
     }
     
-    console.log(`[保存项目] ✓ 项目已成功保存到列表：${projectId}`);
+    console.log(`[保存项目] 项目已成功保存到列表：${projectId}`);
     
     return { 
       success: true, 
@@ -1757,9 +1538,7 @@ ipcMain.handle('save-to-projects-list', async (event, data) => {
   }
 });
 
-// 启动 Python 服务（带 conda 环境）
 let pythonServiceProcess = null;
-
 ipcMain.handle('start-python-service', async (event, config) => {
   try {
     const { script, envName = 'gsir', cwd } = config;
@@ -1767,18 +1546,12 @@ ipcMain.handle('start-python-service', async (event, config) => {
     console.log(`[Python 服务] 准备启动服务：${script}`);
     console.log(`[Python 服务] 使用环境：${envName}`);
     console.log(`[Python 服务] 工作目录：${cwd}`);
-    
-    // 检查是否已有服务在运行
     if (pythonServiceProcess) {
       console.log('[Python 服务] 已有服务在运行，先停止旧服务');
       pythonServiceProcess.kill();
       pythonServiceProcess = null;
     }
-    
-    // 构建完整的命令：先激活 conda 环境，再执行 Python 脚本
     if (process.platform === 'win32') {
-      // Windows: 使用 PowerShell 执行 conda activate && python script.py
-      // 使用 conda 的完整路径来激活环境
       const condaActivate = envManager.condaPath ? 
         `& "${envManager.condaPath}" activate ${envName}` : 
         `conda activate ${envName}`;
@@ -1792,7 +1565,6 @@ ipcMain.handle('start-python-service', async (event, config) => {
         env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
       });
     } else {
-      // Unix/Linux/macOS: 使用 bash -c "source activate gsir && python script.py"
       const fullCommand = `cd '${cwd}' && source activate ${envName} && '${envManager.pythonPath}' '${script}'`;
       console.log('[Python 服务] 执行完整命令:', fullCommand);
       
@@ -1802,7 +1574,6 @@ ipcMain.handle('start-python-service', async (event, config) => {
       });
     }
     
-    // 监听输出
     pythonServiceProcess.stdout.on('data', (data) => {
       const output = data.toString();
       console.log(`[PBR Service] ${output}`);
@@ -1818,7 +1589,7 @@ ipcMain.handle('start-python-service', async (event, config) => {
       pythonServiceProcess = null;
     });
     
-    console.log(`[Python 服务] ✓ 服务启动成功，PID: ${pythonServiceProcess.pid}`);
+    console.log(`[Python 服务] 服务启动成功，PID: ${pythonServiceProcess.pid}`);
     
     return {
       success: true,
@@ -1834,16 +1605,15 @@ ipcMain.handle('start-python-service', async (event, config) => {
   }
 });
 
-// 停止 Python 服务
 ipcMain.handle('stop-python-service', async () => {
   try {
     if (pythonServiceProcess) {
       pythonServiceProcess.kill();
       pythonServiceProcess = null;
-      console.log('[Python 服务] ✓ 服务已停止');
+      console.log('[Python 服务] 服务已停止');
       return { success: true, message: 'Service stopped' };
     } else {
-      console.log('[Python 服务] ⚠️ 没有正在运行的服务');
+      console.log('[Python 服务] 没有正在运行的服务');
       return { success: true, message: 'No running service' };
     }
   } catch (error) {
@@ -1852,10 +1622,8 @@ ipcMain.handle('stop-python-service', async () => {
   }
 });
 
-// 确认退出应用
 ipcMain.handle('confirm-quit-app', async (event, choice) => {
   if (choice === 'quit') {
-    // 用户选择退出 - 先停止所有进程
     if (trainingProcess) {
       trainingProcess.kill();
       trainingProcess = null;
@@ -1867,29 +1635,26 @@ ipcMain.handle('confirm-quit-app', async (event, choice) => {
     if (envManager.installationProcess) {
       await envManager.stopInstallation();
     }
-    
-    // 延迟退出，确保清理完成
     setTimeout(() => {
       app.quit();
     }, 500);
   }
-  // 如果 choice === 'cancel'，什么都不做，继续运行
   return { success: true };
 });
 
-// GPU监控相关IPC处理
+// IPC processing related to GPU monitoring
 ipcMain.handle('get-gpu-info', async () => {
   try {
     const graphics = await si.graphics();
     
     if (graphics.controllers && graphics.controllers.length > 0) {
-      // 获取所有有效的GPU控制器
+      // Get all valid GPU controllers
       const validControllers = graphics.controllers.filter(controller => {
         const modelName = (controller.model || '').toLowerCase();
         const vendorName = (controller.vendor || '').toLowerCase();
         const subDeviceName = (controller.subDevice || '').toLowerCase();
         
-        // 排除虚拟和远程GPU
+        // Exclude virtual and remote GPUs
         const isVirtualOrRemote = 
           modelName.includes('virtual') || 
           modelName.includes('todesk') ||
@@ -1921,13 +1686,13 @@ ipcMain.handle('get-gpu-info', async () => {
       });
       
       if (validControllers.length > 0) {
-        // 根据选中的索引返回对应GPU信息
+        // Return GPU information based on selected index
         let selectedController;
         if (currentSelectedGpuIndex >= 0 && currentSelectedGpuIndex < validControllers.length) {
           selectedController = validControllers[currentSelectedGpuIndex];
           console.log(`返回选中GPU信息[${currentSelectedGpuIndex}]: ${selectedController.vendor} ${selectedController.model}`);
         } else {
-          // 如果没有选中或索引无效，优先返回NVIDIA显卡
+          // If no selection or invalid index, prefer NVIDIA GPUs
           const nvidiaController = validControllers.find(controller => 
             controller.vendor && controller.vendor.toLowerCase().includes('nvidia')
           );
@@ -1935,7 +1700,7 @@ ipcMain.handle('get-gpu-info', async () => {
           console.log(`返回默认GPU信息: ${selectedController.vendor} ${selectedController.model}`);
         }
         
-        // 数据验证和清理
+        // Data cleaning and formatting
         const cleanedData = {
           model: (selectedController.model || 'Unknown GPU').trim(),
           vendor: (selectedController.vendor || 'Unknown').trim(),
@@ -1971,19 +1736,15 @@ ipcMain.handle('get-gpu-info', async () => {
   }
 });
 
-// 新增：获取所有GPU设备信息
 ipcMain.handle('get-all-gpus', async () => {
   try {
     const graphics = await si.graphics();
     
     if (graphics.controllers && graphics.controllers.length > 0) {
-      // 更严格的过滤条件，排除虚拟GPU和远程桌面GPU
       const validGpus = graphics.controllers.filter(controller => {
         const modelName = (controller.model || '').toLowerCase();
         const vendorName = (controller.vendor || '').toLowerCase();
         const subDeviceName = (controller.subDevice || '').toLowerCase();
-        
-        // 排除各种虚拟GPU和远程桌面GPU
         const isVirtualOrRemote = 
           modelName.includes('virtual') || 
           modelName.includes('todesk') ||
@@ -2005,11 +1766,7 @@ ipcMain.handle('get-all-gpus', async () => {
           vendorName.includes('remote') ||
           subDeviceName.includes('virtual') ||
           subDeviceName.includes('todesk');
-        
-        // 确保有实际的显存
-        const hasValidVRAM = (controller.vram || 0) > 32; // 至少32MB显存
-        
-        // 确保是真实的GPU设备
+        const hasValidVRAM = (controller.vram || 0) > 32; 
         const isRealGPU = 
           (controller.vendor && controller.vendor !== 'Unknown') &&
           (controller.model && controller.model !== 'Unknown GPU');
@@ -2017,7 +1774,6 @@ ipcMain.handle('get-all-gpus', async () => {
         return !isVirtualOrRemote && hasValidVRAM && isRealGPU;
       });
       
-      // 清理和格式化GPU数据
       const cleanedGpus = validGpus.map((gpu, index) => ({
         id: index,
         model: (gpu.model || 'Unknown GPU').trim(),
@@ -2057,15 +1813,12 @@ ipcMain.handle('get-all-gpus', async () => {
 ipcMain.handle('get-gpu-usage', async () => {
   try {
     const graphics = await si.graphics();
-    const cpuData = await si.currentLoad(); // 获取CPU负载数据作为参考
+    const cpuData = await si.currentLoad();
     
     if (graphics.controllers && graphics.controllers.length > 0) {
-      // 获取所有有效的GPU控制器
       const validControllers = graphics.controllers.filter(controller => {
         const modelName = (controller.model || '').toLowerCase();
         const vendorName = (controller.vendor || '').toLowerCase();
-        
-        // 排除虚拟和远程GPU
         const isVirtualOrRemote = 
           modelName.includes('virtual') || 
           modelName.includes('todesk') ||
@@ -2085,8 +1838,6 @@ ipcMain.handle('get-gpu-usage', async () => {
           vendorName.includes('virtual') ||
           vendorName.includes('todesk') ||
           vendorName.includes('remote');
-        
-        // 对于集成显卡，降低显存要求
         const minVRAM = modelName.includes('intel') || modelName.includes('amd') ? 8 : 32;
         const hasValidVRAM = (controller.vram || 0) >= minVRAM;
         
@@ -2098,13 +1849,11 @@ ipcMain.handle('get-gpu-usage', async () => {
       });
       
       if (validControllers.length > 0) {
-        // 根据选中的索引获取对应GPU的使用率数据
         let selectedController;
         if (currentSelectedGpuIndex >= 0 && currentSelectedGpuIndex < validControllers.length) {
           selectedController = validControllers[currentSelectedGpuIndex];
           console.log(`获取选中GPU[${currentSelectedGpuIndex}]使用率数据: ${selectedController.vendor} ${selectedController.model}`);
         } else {
-          // 如果没有选中或索引无效，优先选择NVIDIA显卡
           const nvidiaController = validControllers.find(controller => 
             controller.vendor && controller.vendor.toLowerCase().includes('nvidia')
           );
@@ -2114,8 +1863,6 @@ ipcMain.handle('get-gpu-usage', async () => {
         
         console.log(`GPU类型识别: ${selectedController.vendor} ${selectedController.model}`);
         console.log(`VRAM大小: ${selectedController.vram || '未知'} MB`);
-        
-        // 针对不同类型的GPU采用不同的数据获取策略
         let utilization = 0;
         let memoryUsed = 0;
         let memoryTotal = 0;
@@ -2203,7 +1950,7 @@ ipcMain.handle('get-gpu-usage', async () => {
           }
           
         } 
-        // NVIDIA独立显卡处理
+        // NVIDIA GPU handling
         else if (selectedController.vendor && selectedController.vendor.toLowerCase().includes('nvidia')) {
           console.log('检测到NVIDIA独立显卡，使用标准数据获取策略');
           
@@ -2218,7 +1965,6 @@ ipcMain.handle('get-gpu-usage', async () => {
             console.log(`使用模拟数据: ${utilization}%`);
           }
           
-          // 显存信息 - 转换为整数
           if (selectedController.memoryUsed !== undefined && selectedController.memoryUsed >= 0) {
             memoryUsed = Math.round(selectedController.memoryUsed);
           }
@@ -2228,26 +1974,22 @@ ipcMain.handle('get-gpu-usage', async () => {
             memoryTotal = Math.round(selectedController.vram * 1024 * 1024);
           }
           
-          // 温度信息 - 转换为整数
           if (selectedController.temperatureGpu !== undefined && selectedController.temperatureGpu >= 0) {
             temperature = Math.round(selectedController.temperatureGpu);
           } else if (selectedController.temperature && selectedController.temperature.gpu !== undefined && selectedController.temperature.gpu >= 0) {
             temperature = Math.round(selectedController.temperature.gpu);
           }
           
-          // 功耗信息 - 转换为整数
           if (selectedController.powerDraw !== undefined && selectedController.powerDraw >= 0) {
             power = Math.round(selectedController.powerDraw);
           } else if (selectedController.power && selectedController.power.draw !== undefined && selectedController.power.draw >= 0) {
             power = Math.round(selectedController.power.draw);
           }
           
-          // 风扇转速 - 转换为整数
           if (selectedController.fanSpeed !== undefined && selectedController.fanSpeed >= 0) {
             fanSpeed = Math.round(selectedController.fanSpeed);
           }
         } 
-        // 其他GPU类型
         else {
           console.log('检测到其他类型GPU，使用通用数据获取策略');
           
@@ -2256,13 +1998,11 @@ ipcMain.handle('get-gpu-usage', async () => {
           } else if (selectedController.utilization && selectedController.utilization.gpu !== undefined && selectedController.utilization.gpu >= 0) {
             utilization = Math.round(selectedController.utilization.gpu);
           } else {
-            // 如果没有具体数据，使用CPU负载作为参考
             const cpuLoad = cpuData && cpuData.currentLoad ? cpuData.currentLoad : 35;
             utilization = Math.round(Math.max(15, Math.min(85, cpuLoad * 0.6 + Math.random() * 20)));
             console.log(`使用CPU负载推算其他GPU使用率: ${Math.round(cpuLoad)}% CPU → ${utilization}% GPU`);
           }
           
-          // 显存信息 - 转换为整数
           if (selectedController.memoryUsed !== undefined && selectedController.memoryUsed >= 0) {
             memoryUsed = Math.round(selectedController.memoryUsed);
           }
@@ -2274,7 +2014,6 @@ ipcMain.handle('get-gpu-usage', async () => {
             memoryTotal = 1024 * 1024 * 1024;
           }
           
-          // 温度信息 - 转换为整数
           if (selectedController.temperatureGpu !== undefined && selectedController.temperatureGpu >= 0) {
             temperature = Math.round(selectedController.temperatureGpu);
           } else if (selectedController.temperature && selectedController.temperature.gpu !== undefined && selectedController.temperature.gpu >= 0) {
@@ -2283,8 +2022,6 @@ ipcMain.handle('get-gpu-usage', async () => {
             temperature = Math.round(40 + Math.random() * 30);
           }
         }
-
-        // 数据验证和边界检查 - 保持整数格式
         const validatedData = {
           utilization: Math.round(Math.max(0, Math.min(100, utilization))),
           memoryUsed: Math.round(Math.max(0, memoryUsed)),
@@ -2294,7 +2031,6 @@ ipcMain.handle('get-gpu-usage', async () => {
           fanSpeed: Math.round(Math.max(0, Math.min(100, fanSpeed)))
         };
 
-        // 确保显存使用不超过总量
         if (validatedData.memoryUsed > validatedData.memoryTotal) {
           validatedData.memoryUsed = validatedData.memoryTotal;
         }
@@ -2334,29 +2070,20 @@ ipcMain.handle('get-gpu-usage', async () => {
 });
 
 app.whenReady().then(async () => {
-  // 注册 luma:// 协议处理器
   protocol.handle('luma', async (request) => {
     try {
       const path = require('path');
       const fs = require('fs');
-      
-      // 从 URL 中提取文件路径
-      // luma://E:/path/to/file.png -> E:/path/to/file.png
       const urlPath = request.url.slice('luma://'.length);
       
       console.log('[Luma Protocol] 原始 URL:', request.url);
       console.log('[Luma Protocol] 提取路径:', urlPath);
-      
-      // ✅ 关键修复：不要解码，直接使用原始路径
-      // 因为路径已经是正斜杠格式，不需要 decodeURIComponent
       const filePath = urlPath;
       
       console.log('[Luma Protocol] 最终路径:', filePath);
       
-      // 检查文件是否存在
       if (!fs.existsSync(filePath)) {
-        console.error('[Luma Protocol] ❌ 文件不存在:', filePath);
-        // 尝试一些可能的变体
+        console.error('[Luma Protocol] 文件不存在:', filePath);
         const alternatives = [
           filePath.replace(/^e\//i, 'E:/'),
           filePath.replace(/^E\//i, 'E:/'),
@@ -2377,15 +2104,13 @@ app.whenReady().then(async () => {
         
         return new Response('File not found: ' + filePath, { status: 404 });
       }
-      
-      // 读取文件内容
       const fileContent = await fs.promises.readFile(filePath);
       
-      // 根据文件扩展名确定 MIME 类型
+      // Determine the MIME type based on the file extension
       const ext = path.extname(filePath).toLowerCase();
       const mimeType = getImageMimeType(ext);
       
-      console.log(`[Luma Protocol] ✓ 返回文件：${filePath} (${mimeType})`);
+      console.log(`[Luma Protocol] 返回文件：${filePath} (${mimeType})`);
       
       return new Response(fileContent, {
         headers: {
@@ -2393,32 +2118,26 @@ app.whenReady().then(async () => {
         }
       });
     } catch (error) {
-      console.error('[Luma Protocol] ❌ 错误:', error);
+      console.error('[Luma Protocol] 错误:', error);
       return new Response('Internal Server Error', { status: 500 });
     }
   });
   
-  // 先创建窗口，正常显示主页
   createWindow();
-  
-  // 在后台异步执行环境初始化，不阻塞界面
   initializePythonEnvironment();
 })
 
 app.on('window-all-closed', () => {
-  // 检查是否有正在运行的进程
   const hasRunningProcess = trainingProcess || bakingProcess || envManager.installationProcess;
   
   if (hasRunningProcess) {
     console.log('检测到有进程正在运行，显示确认对话框...');
-    // 给前端发送消息，显示确认对话框
     if (mainWindow) {
       mainWindow.webContents.send('confirm-quit', {
         hasTraining: !!trainingProcess,
         hasBaking: !!bakingProcess,
         hasInstallation: !!envManager.installationProcess
       });
-      // 阻止立即关闭，等待用户确认
       return;
     }
   }
@@ -2434,7 +2153,6 @@ app.on('activate', () => {
   }
 })
 
-// 环境管理相关 IPC 处理
 ipcMain.handle('detect-python-conda', async () => {
   try {
     const result = await envManager.detectPythonAndConda();
@@ -2457,95 +2175,83 @@ ipcMain.handle('create-environment', async (event, config) => {
   try {
     const { ymlPath, envName } = config;
     
-    console.log('===== 收到环境安装请求 =====');
     console.log('配置参数:', config);
     console.log('envManager.condaPath:', envManager.condaPath);
     console.log('envManager.isInitialized:', envManager.isInitialized);
-    
-    // 检查 conda 是否存在
     if (!envManager.condaPath) {
       console.error('未找到 Conda 路径');
       return { success: false, error: '未检测到 Conda，请先安装 Miniconda' };
     }
     
-    // 将相对路径转换为绝对路径
     const absoluteYmlPath = path.join(__dirname, '../../GS-IR/environment.yml');
     console.log('环境配置文件绝对路径:', absoluteYmlPath);
     
-    // 检查文件是否存在
     try {
       await fs.access(absoluteYmlPath);
       console.log('✓ environment.yml 文件存在');
       
-      // 尝试读取并验证 YAML 文件
       const yamlContent = await fs.readFile(absoluteYmlPath, 'utf8');
       if (yamlContent.length === 0) {
-        console.error('✗ environment.yml 文件为空');
+        console.error('environment.yml 文件为空');
         return { success: false, error: 'environment.yml 文件为空' };
       }
       
       // 检查是否有 BOM
       if (yamlContent.charCodeAt(0) === 0xFEFF) {
-        console.warn('⚠ 检测到 BOM，尝试移除...');
+        console.warn('检测到 BOM，尝试移除...');
         // 移除 BOM 并重新写入文件
         const cleanContent = yamlContent.slice(1);
         await fs.writeFile(absoluteYmlPath, cleanContent, 'utf8');
         console.log('已移除 BOM');
       }
       
-      console.log('✓ environment.yml 文件大小:', yamlContent.length, '字节');
+      console.log('environment.yml 文件大小:', yamlContent.length, '字节');
     } catch (err) {
-      console.error('✗ environment.yml 文件不存在或无法读取:', absoluteYmlPath);
+      console.error('environment.yml 文件不存在或无法读取:', absoluteYmlPath);
       console.error('错误详情:', err);
       return { success: false, error: '找不到 environment.yml 文件或无法读取' };
     }
     
     console.log('开始调用 envManager.createEnvironment...');
     const result = await envManager.createEnvironment(absoluteYmlPath, envName);
-    console.log('✓ createEnvironment 返回结果:', result);
+    console.log('createEnvironment 返回结果:', result);
     return result;
   } catch (error) {
-    console.error('✗ 创建环境失败:', error);
+    console.error('创建环境失败:', error);
     console.error('错误堆栈:', error.stack);
     return { success: false, error: error.message };
   }
 });
 
-// 运行安装脚本
+// Run the installation script
 ipcMain.handle('run-install-script', async (event, config) => {
   try {
     const { scriptPath, mode } = config;
     
-    console.log('===== 收到运行安装脚本请求 =====');
+    console.log('运行安装脚本请求');
     console.log('脚本路径:', scriptPath);
     console.log('安装模式:', mode);
-    
-    // 检查 conda 是否存在
     if (!envManager.condaPath) {
       console.error('未找到 Conda 路径');
       return { success: false, error: '未检测到 Conda，请先安装 Miniconda' };
     }
-    
-    // 将相对路径转换为绝对路径
     const absoluteScriptPath = path.join(__dirname, '../../GS-IR/install_environment.bat');
     console.log('安装脚本绝对路径:', absoluteScriptPath);
-    
-    // 检查脚本文件是否存在
     try {
       await fs.access(absoluteScriptPath);
-      console.log('✓ 安装脚本文件存在');
+      console.log('安装脚本文件存在');
     } catch (err) {
-      console.error('✗ 安装脚本文件不存在:', absoluteScriptPath);
+      console.error('安装脚本文件不存在:', absoluteScriptPath);
       console.error('错误详情:', err);
       return { success: false, error: '找不到安装脚本文件' };
     }
     
     console.log('开始调用 envManager.runInstallScript...');
     const result = await envManager.runInstallScript(absoluteScriptPath, mode);
-    console.log('✓ runInstallScript 返回结果:', result);
+    console.log('runInstallScript 返回结果:', result);
     return result;
   } catch (error) {
-    console.error('✗ 运行安装脚本失败:', error);
+    console.error('运行安装脚本失败:', error);
     console.error('错误堆栈:', error.stack);
     return { success: false, error: error.message };
   }
@@ -2555,15 +2261,11 @@ ipcMain.handle('get-environment-info', () => {
   return { success: true, info: envManager.getEnvironmentInfo() };
 });
 
-// Python 环境初始化函数 - 在后台异步执行
+// Initialize Python environment in the background
 async function initializePythonEnvironment() {
-  console.log('开始初始化 Python 环境 (后台任务)...');
-  
-  // 检测现有环境
+  console.log('开始初始化 Python 环境 ...');
   const detection = await envManager.detectPythonAndConda();
   console.log('环境检测结果:', detection);
-  
-  // 如果已存在环境，验证其有效性
   if (detection.availableEnvs && detection.availableEnvs.length > 0) {
     for (const envPath of detection.availableEnvs) {
       const exists = await envManager.checkEnvironmentExists(envPath);
@@ -2571,30 +2273,25 @@ async function initializePythonEnvironment() {
         const validation = await envManager.validateEnvironment();
         if (validation.valid) {
           console.log('找到有效的 Python 环境:', envPath);
-          return; // 已有有效环境，退出
+          return;
         }
       }
     }
   }
-  
-  // 注意：不再主动通知前端需要安装
-  // 只有当用户访问训练页面时，路由守卫才会检查环境并提示
   console.log('未检测到有效的 Python 环境，等待用户访问训练页面时再提示');
 }
 
-// 数据集格式检查
+// Dataset format check
 ipcMain.handle('check-dataset-format', async (event, sourcePath) => {
   try {
     console.log('检查数据集格式:', sourcePath);
-    
-    // 检查路径是否存在
     try {
       await fs.access(sourcePath);
     } catch (err) {
       return { success: false, error: '数据集路径不存在' };
     }
     
-    // 检查 TensoIR 格式
+    // Check TensoIR format
     const tensoirImages = await fs.access(path.join(sourcePath, 'train')).then(() => true).catch(() => false);
     const tensoirTest = await fs.access(path.join(sourcePath, 'test')).then(() => true).catch(() => false);
     const tensoirSfM = await fs.access(path.join(sourcePath, 'sphere_points.json')).then(() => true).catch(() => false);
@@ -2607,7 +2304,7 @@ ipcMain.handle('check-dataset-format', async (event, sourcePath) => {
       };
     }
     
-    // 检查 Mip-NeRF 360 格式
+    // Check Mip-NeRF 360 format
     const mipnerfImages2 = await fs.access(path.join(sourcePath, 'images_2')).then(() => true).catch(() => false);
     const mipnerfImages4 = await fs.access(path.join(sourcePath, 'images_4')).then(() => true).catch(() => false);
     const mipnerfSparse = await fs.access(path.join(sourcePath, 'sparse/0')).then(() => true).catch(() => false);
@@ -2621,7 +2318,7 @@ ipcMain.handle('check-dataset-format', async (event, sourcePath) => {
       };
     }
     
-    // 检查 COLMAP 格式
+    // Check COLMAP format
     const colmapSparse = await fs.access(path.join(sourcePath, 'sparse/0')).then(() => true).catch(() => false);
     const colmapImages = await fs.access(path.join(sourcePath, 'images')).then(() => true).catch(() => false);
     
@@ -2633,7 +2330,7 @@ ipcMain.handle('check-dataset-format', async (event, sourcePath) => {
       };
     }
     
-    // 其他情况，需要转换
+    // Other cases, conversion needed
     return { 
       success: true, 
       format: 'custom',
@@ -2645,29 +2342,24 @@ ipcMain.handle('check-dataset-format', async (event, sourcePath) => {
   }
 });
 
-// 数据集转换
+// Dataset conversion
 ipcMain.handle('convert-dataset', async (event, config) => {
   try {
     const { sourcePath, resize } = config;
     console.log('开始转换数据集:', sourcePath, 'resize:', resize);
-    
-    // 检查路径是否存在
     try {
       await fs.access(sourcePath);
     } catch (err) {
       return { success: false, error: '数据集路径不存在' };
     }
     
-    // 检查是否有 input 子目录，如果没有，创建它并将所有图片移动到 input
+    // Check if input subdirectory exists, if not, create it and move all images to input
     const inputPath = path.join(sourcePath, 'input');
     const inputExists = await fs.access(inputPath).then(() => true).catch(() => false);
     
     if (!inputExists) {
-      // 创建 input 目录
       await fs.mkdir(inputPath, { recursive: true });
       console.log('创建 input 目录:', inputPath);
-      
-      // 获取所有图片文件
       const files = await fs.readdir(sourcePath);
       const imageExtensions = ['.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif'];
       const imageFiles = files.filter(f => 
@@ -2675,8 +2367,6 @@ ipcMain.handle('convert-dataset', async (event, config) => {
       );
       
       console.log(`找到 ${imageFiles.length} 个图片文件，移动到 input 目录`);
-      
-      // 移动图片到 input 目录
       for (const file of imageFiles) {
         const srcFile = path.join(sourcePath, file);
         const destFile = path.join(inputPath, file);
@@ -2688,25 +2378,16 @@ ipcMain.handle('convert-dataset', async (event, config) => {
         }
       }
     }
-    
-    // 直接使用 Python 执行 convert.py 脚本
     const convertScriptPath = path.join(__dirname, '../../tools/gaussian-splatting/convert.py');
-    
-    // 检查脚本文件是否存在
     const scriptExists = await fs.access(convertScriptPath).then(() => true).catch(() => false);
     if (!scriptExists) {
       return { success: false, error: '找不到转换脚本：' + convertScriptPath };
     }
-    
-    // 构建命令参数
     const scriptArgs = ['-s', sourcePath];
     if (resize) {
       scriptArgs.push('--resize');
     }
-    
     console.log('运行转换脚本:', envManager.pythonPath, convertScriptPath, scriptArgs.join(' '));
-    
-    // 启动转换进程 - 使用 Python 环境管理器执行
     conversionProcess = envManager.runPythonScript(convertScriptPath, scriptArgs, {
       cwd: path.join(__dirname, '../../tools/gaussian-splatting'),
       env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
@@ -2729,13 +2410,11 @@ ipcMain.handle('convert-dataset', async (event, config) => {
     });
     
     console.log('[CONVERT] 进程退出，代码:', exitCode);
-    
-    // 检查是否是用户主动取消
     if (conversionCancelled) {
-      conversionCancelled = false; // 重置标志
-      mainWindow.webContents.send('conversion-close', { code: -1 }); // 发送特殊代码表示取消
+      conversionCancelled = false; 
+      mainWindow.webContents.send('conversion-close', { code: -1 }); 
       conversionProcess = null;
-      return { success: true, cancelled: true }; // 返回成功但标记为取消
+      return { success: true, cancelled: true };
     }
     
     mainWindow.webContents.send('conversion-close', { code: exitCode });
@@ -2761,46 +2440,29 @@ app.on(
   }
 );
 
-// ==================== 项目管理相关 IPC ====================
 
-// 获取操作系统平台
+// Get the operating system platform
 ipcMain.handle('get-platform', async () => {
   return process.platform;
 });
-
-// 将本地文件路径转换为 luma:// URL
 ipcMain.handle('convert-file-path', async (event, filePath) => {
   try {
     const path = require('path');
-    
-    // 规范化路径（替换反斜杠为正斜杠）
     let normalizedPath = filePath.replace(/\\/g, '/');
-    
-    // ✅ 关键修复：确保 Windows 盘符路径正确
-    // Windows: E:\path -> E:/path -> luma://E:/path
-    // 检查是否是 Windows 绝对路径（包含盘符）
     if (/^[A-Za-z]:/.test(filePath)) {
-      // 已经是标准格式，不需要额外处理
       console.log(`[ConvertPath] 检测到 Windows 绝对路径：${filePath}`);
     }
-    
-    // 转换为 luma:// URL
     const lumaUrl = `luma://${normalizedPath}`;
-    
     console.log(`[ConvertPath] ${filePath} -> ${lumaUrl}`);
-    
     return { success: true, url: lumaUrl };
   } catch (error) {
     console.error('[ConvertPath] 转换失败:', error);
     return { success: false, error: error.message };
   }
 });
-
-// 获取所有项目列表
 ipcMain.handle('get-project-list', async () => {
   try {
     const projects = projectManager.getAllProjects();
-    // 扫描并更新项目状态
     await projectManager.scanProjects();
     return { success: true, data: projects };
   } catch (error) {
@@ -2808,8 +2470,6 @@ ipcMain.handle('get-project-list', async () => {
     return { success: false, error: error.message };
   }
 });
-
-// 获取单个项目详情
 ipcMain.handle('get-project-detail', async (event, projectId) => {
   try {
     const result = await projectManager.loadProject(projectId);
@@ -2820,7 +2480,6 @@ ipcMain.handle('get-project-detail', async (event, projectId) => {
   }
 });
 
-// 获取队列状态
 ipcMain.handle('get-queue-status', async () => {
   try {
     return {
@@ -2841,7 +2500,6 @@ ipcMain.handle('get-queue-status', async () => {
   }
 });
 
-// 获取目录大小
 ipcMain.handle('get-directory-size', async (event, dirPath) => {
   try {
     const fs = require('fs');
@@ -2852,7 +2510,6 @@ ipcMain.handle('get-directory-size', async (event, dirPath) => {
     }
     
     let totalSize = 0;
-    
     function calculateSize(currentPath) {
       const stats = fs.statSync(currentPath);
       

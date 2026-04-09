@@ -1,8 +1,6 @@
 <template>
   <section class="editor-container">
-    <!-- 1. 顶部全局栏 (Top Bar) -->
     <div class="top-bar">
-      <!-- 系统菜单区 -->
       <div class="menu-section">
         <div class="logo">
           <span class="iconify" data-icon="solar:3d-cube-bold"></span>
@@ -57,7 +55,6 @@
         </div>
       </div>
 
-      <!-- 工作区切换区 -->
       <div class="workspace-tabs">
         <div 
           class="workspace-tab" 
@@ -96,7 +93,6 @@
         </div>
       </div>
 
-      <!-- 场景快捷区 -->
       <div class="scene-controls">
         <select v-model="activeScene" class="scene-select">
           <option value="scene1">Main Scene</option>
@@ -116,7 +112,6 @@
         </div>
       </div>
       
-      <!-- 窗口控制按钮区 -->
       <div class="window-controls-wrapper">
         <div class="window-control-btn" @click.stop="minimizeWindow" title="Minimize">
           <img :src="'/src/drawable/minimizing.png'" class="window-btn-icon">
@@ -132,10 +127,7 @@
         </div>
       </div>
     </div>
-
-    <!-- 主体内容区 -->
     <div class="main-content">
-      <!-- 2. 左侧交互工具栏 (Toolbar) -->
       <div class="toolbar-left">
         <div class="tool-group">
           <button 

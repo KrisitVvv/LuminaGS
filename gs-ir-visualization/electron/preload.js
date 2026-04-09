@@ -3,22 +3,22 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('electronAPI', {
   // 系统信息相关 API
   getPlatform: () => ipcRenderer.invoke('get-platform'),
-  // ✅ 新增：将本地文件路径转换为可访问的 URL
+  // 将本地文件路径转换为可访问的 URL
   convertFilePath: (filePath) => ipcRenderer.invoke('convert-file-path', filePath),
   minimizeWindow: () => ipcRenderer.invoke('minimize-window'),
   maximizeWindow: () => ipcRenderer.invoke('maximize-window'),
   restoreWindow: () => ipcRenderer.invoke('restore-window'),
   closeWindow: () => ipcRenderer.invoke('close-window'),
-  // ✅ 新增：打开 Editor 专用窗口
+  // 打开 Editor 专用窗口
   openEditorWindow: (config) => ipcRenderer.invoke('open-editor-window', config),
   // 添加窗口移动相关 API
   startDragging: () => ipcRenderer.invoke('start-dragging'),
   // GPU 监控相关 API
   getGpuInfo: () => ipcRenderer.invoke('get-gpu-info'),
   getGpuUsage: () => ipcRenderer.invoke('get-gpu-usage'),
-  // 新增：获取所有 GPU 设备
+  // 获取所有 GPU 设备
   getAllGpus: () => ipcRenderer.invoke('get-all-gpus'),
-  // 新增：设置选中 GPU 索引
+  // 设置选中 GPU 索引
   setSelectedGpuIndex: (index) => ipcRenderer.invoke('set-selected-gpu-index', index),
   // Python 环境管理相关 API
   detectPythonConda: () => ipcRenderer.invoke('detect-python-conda'),
@@ -47,9 +47,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 文件和目录选择
   selectDirectory: () => ipcRenderer.invoke('select-directory'),
   selectFile: (options) => ipcRenderer.invoke('select-file', options),
-  // ✅ 新增：检查文件夹是否为空
+  // 检查文件夹是否为空
   checkFolderEmpty: (folderPath) => ipcRenderer.invoke('check-folder-empty', folderPath),
-  // ✅ 新增：检查文件是否存在
+  // 检查文件是否存在
   checkFileExists: (filePath) => ipcRenderer.invoke('check-file-exists', filePath),
   // 数据集管理
   checkDatasetFormat: (sourcePath) => ipcRenderer.invoke('check-dataset-format', sourcePath),
@@ -78,19 +78,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onTrainingQueueUpdate: (callback) => {
     ipcRenderer.on('training-queue-update', (event, data) => callback(data));
   },
-  // 更新项目配置（实时自动保存）
+  // 更新项目配置
   updateProjectConfig: (projectId, config) => ipcRenderer.invoke('update-project-config', { projectId, config }),
   // 更新项目阶段
   updateProjectStage: (projectId, stage) => ipcRenderer.invoke('update-project-stage', { projectId, stage }),
   // 同步 sourcePath 字段到 projects.json
   syncSourcePathToProjects: () => ipcRenderer.invoke('sync-source-path-to-projects'),
-  // ✅ 新增：检查训练是否完成
+  // 检查训练是否完成
   checkTrainingCompletion: (projectId) => ipcRenderer.invoke('check-training-completion', projectId),
   // 监听训练完成事件
   onTrainingCompleted: (callback) => {
     ipcRenderer.on('training-completed', (event, data) => callback(data));
   },
-  // ✅ 新增：获取项目配置
+  // 获取项目配置
   getProjectConfig: (projectId) => ipcRenderer.invoke('get-project-config', projectId),
   // 删除项目输出目录
   deleteOutputDirectory: (outputPath) => ipcRenderer.invoke('delete-output-directory', outputPath),
