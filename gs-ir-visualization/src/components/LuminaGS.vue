@@ -59,12 +59,6 @@
               </router-link>
             </div>
           </nav>
-          
-          <div class="sidebar-footer">
-            <div class="user-avatar">
-              <img alt="User Profile" class="avatar-img" :src="avatarImage" @error="onImageError">
-            </div>
-          </div>
         </div>
       </aside>
       
@@ -112,7 +106,6 @@ export default {
       sidebarExpanded: false,
       expandTimer: null,
       avatarImage: 'https://modao.cc/agent-py/media/generated_images/2026-01-30/6190da8135da4d32999730787ce10cac.jpg',
-      isMaximized: false,
       maximizedHandler: null,
       restoredHandler: null
     }
@@ -149,7 +142,6 @@ export default {
     onImageError() {
       this.avatarImage = '/default-avatar.png';
     },
-    // 窗口控制方法
     minimizeWindow() {
       if (window.electronAPI) {
         window.electronAPI.minimizeWindow();
@@ -285,7 +277,7 @@ export default {
 }
 
 .sidebar.expanded {
-  width: 15rem;
+  width: 12rem;
 }
 
 .sidebar.collapsed {
@@ -350,12 +342,17 @@ export default {
 }
 
 .nav-collapsed .nav-item-collapsed {
-  padding-left: 0.8rem;
+  padding-left: 1.75rem;
 }
 
 .nav-expanded .nav-item {
   justify-content: flex-start;
-  padding-left: 0.8rem;
+  padding-left: 1.75rem;
+}
+
+.nav-expanded .nav-item .icon {
+  width: 1.5rem;
+  text-align: center;
 }
 
 .nav-text {
@@ -400,7 +397,7 @@ export default {
 }
 
 .main-content-area.sidebar-expanded {
-  margin-left: 15rem;
+  margin-left: 12rem;
 }
 
 @media (max-width: 768px) {
@@ -526,6 +523,12 @@ export default {
 .nav-item:not(.router-link-exact-active):hover .icon,
 .nav-item-collapsed:not(.router-link-exact-active):hover .icon {
   color: #9333ea !important;
+}
+
+.nav-item:focus,
+.nav-item-collapsed:focus,
+button:focus {
+  outline: none;
 }
 
 .main-container::-webkit-scrollbar,

@@ -11,10 +11,6 @@ export default defineConfig({
     }
   },
   server: {
-    host: 'localhost',  // 设置主机地址
-    headers: {
-      'Cross-Origin-Opener-Policy': 'same-origin',
-      'Cross-Origin-Embedder-Policy': 'require-corp'
-    }
+    host: 'localhost'  // 设置主机地址
   }
 })
