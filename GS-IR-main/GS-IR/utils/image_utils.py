@@ -41,3 +41,43 @@ def turbo_cmap(gray: np.ndarray) -> np.ndarray:
     """
     colored = plt.cm.turbo(plt.Normalize()(gray.squeeze()))[..., :-1]
     return colored.astype(np.float32)
+
+import torch.nn.functional as F
+from PIL import Image
+
+def normal_angle_error_map(
+    pred_normal: torch.Tensor,
+    gt_normal: torch.Tensor,
+    mask: torch.Tensor,
+    max_vis_angle: float = 30.0
+) -> np.ndarray:
+    pred_normal = F.normalize(pred_normal, p=2, dim=0, eps=1e-6)
+    gt_normal = F.normalize(gt_normal, p=2, dim=0, eps=1e-6)
+    
+    dot_product = torch.sum(pred_normal * gt_normal, dim=0)
+    dot_product = torch.clamp(dot_product, -1.0, 1.0)
+    angle_error = torch.acos(dot_product) * 180.0 / np.pi
+    
+    angle_error[~mask] = 0.0
+    angle_error = torch.clamp(angle_error, 0.0, max_vis_angle)
+    
+    return angle_error.cpu().numpy()
+
+def save_angle_error_heatmap(
+    angle_error_np: np.ndarray,
+    save_path: str,
+    colormap: str = "turbo"
+) -> None:
+    from matplotlib import cm
+    import matplotlib.pyplot as plt
+    
+    normalized_error = angle_error_np / 30.0
+    
+    if colormap == "turbo":
+        cmap = cm.get_cmap("turbo")
+    else:
+        cmap = cm.get_cmap("jet")
+    heatmap = cmap(normalized_error)
+    
+    heatmap_pil = Image.fromarray((heatmap[:, :, :3] * 255).astype(np.uint8))
+    heatmap_pil.save(save_path)

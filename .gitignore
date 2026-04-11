@@ -4,3 +4,6 @@ gs-ir-visualization/node_modules
 Depth-Anything-3/
 Relightable3DGaussian/
 
+# 忽略 Windows 自动生成的 Zone Identifier 文件
+*:Zone.Identifier
+

@@ -1,4 +1,5 @@
 import os
+os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
 import sys
 import uuid
 from argparse import ArgumentParser, Namespace
@@ -19,7 +20,7 @@ from gs_ir import recon_occlusion, IrradianceVolumes
 from pbr import CubemapLight, get_brdf_lut, pbr_shading
 from scene import GaussianModel, Scene, Camera
 from utils.general_utils import safe_state
-from utils.image_utils import psnr, turbo_cmap
+from utils.image_utils import psnr, turbo_cmap, normal_angle_error_map, save_angle_error_heatmap
 from utils.loss_utils import l1_loss, ssim
 
 try:
@@ -132,6 +133,7 @@ def training(
     tone: bool = False,
     gamma: bool = False,
     normal_tv_weight: float = 1.0,
+    normal_loss_weight: float = 1.0,
     brdf_tv_weight: float = 1.0,
     env_tv_weight: float = 0.01,
     bound: float = 1.5,
@@ -260,10 +262,95 @@ def training(
         normal_loss = 0.0
         if iteration <= pbr_iteration:
             loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
-            # normal loss
-            normal_loss_weight = 1.0
-            mask = rendering_result["normal_from_depth_mask"]  # [1, H, W]
-            normal_loss = F.l1_loss(normal_map[:, mask], normal_map_from_depth[:, mask])
+            # 【新增】渐进式混合监督逻辑
+            # 前期（<15000迭代）：用原版自监督（深度推导法线），保证几何自洽
+            if iteration < 15000:
+                normal_map_from_depth = rendering_result["normal_map_from_depth"]
+                mask = rendering_result["normal_from_depth_mask"]
+                normal_loss = F.l1_loss(normal_map[:, mask], normal_map_from_depth[:, mask])
+                # 【新增】打印L1损失数值
+                if iteration == 14999:
+                    print(f"[DEBUG] Iteration {iteration}, normal_loss_weight = {normal_loss_weight}")
+                    print(f"[DEBUG] Last L1 loss: {normal_loss.item()}")
+            # 后期（≥15000迭代）：切换为GT法线监督，提升精度
+            else:
+                if hasattr(viewpoint_cam, "gt_normal") and viewpoint_cam.gt_normal is not None:
+                    # 1. 原始读取：获取 imageio 读入的 GT 法线
+                    orig_gt_normal_map = viewpoint_cam.gt_normal.cuda()
+                    
+                    # 2. 直接安全归一化 (防 NaN)
+                    orig_gt_normal_map = F.normalize(orig_gt_normal_map, p=2, dim=0, eps=1e-6)
+
+                    # 3. 截断掩码与归一化预测法线
+                    mask = (viewpoint_cam.gt_alpha_mask.cuda() > 0.5).squeeze(0)
+                    normal_map = F.normalize(normal_map, p=2, dim=0, eps=1e-6)
+                    pred_normal_masked = normal_map[:, mask]  # [3, N]
+
+                    # 【诊断逻辑】在15000步打印不同坐标系组合的Loss，使用.clone()防污染
+                    if iteration == 15000:
+                        print(f"\n[DEBUG] --- Iteration {iteration} Normal Coordinate Diagnostics ---")
+                        
+                        # (A) 纯基准 (未翻转)
+                        gt_pure = orig_gt_normal_map[:, mask]
+                        loss_pure = (1.0 - torch.clamp(torch.sum(pred_normal_masked * gt_pure, dim=0), -1.0, 1.0)).mean().item()
+                        print(f"[DEBUG] Baseline (No flip): {loss_pure:.4f}")
+                        
+                        # (B) 翻转X轴
+                        gt_x = orig_gt_normal_map.clone()
+                        gt_x[0] = -gt_x[0]
+                        loss_x = (1.0 - torch.clamp(torch.sum(pred_normal_masked * gt_x[:, mask], dim=0), -1.0, 1.0)).mean().item()
+                        print(f"[DEBUG] Flip X axis:      {loss_x:.4f}")
+                        
+                        # (C) 翻转Y轴
+                        gt_y = orig_gt_normal_map.clone()
+                        gt_y[1] = -gt_y[1]
+                        loss_y = (1.0 - torch.clamp(torch.sum(pred_normal_masked * gt_y[:, mask], dim=0), -1.0, 1.0)).mean().item()
+                        print(f"[DEBUG] Flip Y axis:      {loss_y:.4f}")
+                        
+                        # (D) 翻转Z轴
+                        gt_z = orig_gt_normal_map.clone()
+                        gt_z[2] = -gt_z[2]
+                        loss_z = (1.0 - torch.clamp(torch.sum(pred_normal_masked * gt_z[:, mask], dim=0), -1.0, 1.0)).mean().item()
+                        print(f"[DEBUG] Flip Z axis:      {loss_z:.4f}")
+                        
+                        # (E) 翻转X和Y轴
+                        gt_xy = orig_gt_normal_map.clone()
+                        gt_xy[0] = -gt_xy[0]
+                        gt_xy[1] = -gt_xy[1]
+                        loss_xy = (1.0 - torch.clamp(torch.sum(pred_normal_masked * gt_xy[:, mask], dim=0), -1.0, 1.0)).mean().item()
+                        print(f"[DEBUG] Flip X and Y:     {loss_xy:.4f}")
+
+                        # (F) 翻转X和Z轴
+                        gt_xz = orig_gt_normal_map.clone()
+                        gt_xz[0] = -gt_xz[0]
+                        gt_xz[2] = -gt_xz[2]
+                        loss_xz = (1.0 - torch.clamp(torch.sum(pred_normal_masked * gt_xz[:, mask], dim=0), -1.0, 1.0)).mean().item()
+                        print(f"[DEBUG] Flip X and Z:     {loss_xz:.4f}")
+                        
+                        # (G) 翻转Y和Z轴
+                        gt_yz = orig_gt_normal_map.clone()
+                        gt_yz[1] = -gt_yz[1]
+                        gt_yz[2] = -gt_yz[2]
+                        loss_yz = (1.0 - torch.clamp(torch.sum(pred_normal_masked * gt_yz[:, mask], dim=0), -1.0, 1.0)).mean().item()
+                        print(f"[DEBUG] Flip Y and Z:     {loss_yz:.4f}")
+
+                        # (H) 全局取反
+                        gt_inv = -orig_gt_normal_map.clone()
+                        loss_inv = (1.0 - torch.clamp(torch.sum(pred_normal_masked * gt_inv[:, mask], dim=0), -1.0, 1.0)).mean().item()
+                        print(f"[DEBUG] Invert all (-X,-Y,-Z): {loss_inv:.4f}")
+                        
+                        print("[DEBUG] ---------------------------------------------------------\n")
+
+                    # 4. 正常训练流程：暂用原始未翻转的计算以维持逻辑完整性进行继续训练
+                    gt_normal_masked = orig_gt_normal_map[:, mask]
+                    dot_product = torch.sum(pred_normal_masked * gt_normal_masked, dim=0)
+                    dot_product = torch.clamp(dot_product, -1.0, 1.0)
+                    normal_loss = (1.0 - dot_product).mean()
+                else:
+                    normal_map_from_depth = rendering_result["normal_map_from_depth"]
+                    mask = rendering_result["normal_from_depth_mask"]
+                    normal_loss = F.l1_loss(normal_map[:, mask], normal_map_from_depth[:, mask])
+                
             loss += normal_loss_weight * normal_loss
             normal_tv_loss = get_tv_loss(gt_image, normal_map, pad=1, step=1)
             loss += normal_tv_loss * normal_tv_weight
@@ -684,6 +771,40 @@ def training_report(
                                 resize_tensorboard_img(pbr_image, 2400)[None],
                                 global_step=iteration,
                             )
+                            
+                        # 【新增】法线角度误差可视化（仅Stage1有GT法线时）
+                        if iteration <= pbr_iteration and hasattr(viewpoint, "gt_normal") and viewpoint.gt_normal is not None:
+                            # 1. 获取数据
+                            pred_normal = render_result["normal_map"].cpu()
+                            gt_normal = viewpoint.gt_normal.cpu()
+                            mask = (viewpoint.gt_alpha_mask > 0.5).squeeze(0).cpu()
+                            
+                            # 2. 计算角度误差
+                            angle_error_np = normal_angle_error_map(pred_normal, gt_normal, mask)
+                            
+                            # 3. 转换为Tensor用于TensorBoard
+                            angle_error_tensor = torch.from_numpy(angle_error_np)[None, ...]  # [1, H, W]
+                            # 归一化到[0,1]
+                            angle_error_tensor = angle_error_tensor / 30.0
+                            
+                            # 4. 保存到TensorBoard
+                            tb_writer.add_images(
+                                f"{config['name']}_view_{viewpoint.image_name}_{idx}/normal_angle_error",
+                                angle_error_tensor[None],  # [1, 1, H, W]
+                                global_step=iteration,
+                                dataformats="NCHW"
+                            )
+                            
+                            # 5. 【可选】同时保存为图片到输出文件夹
+                            import os
+                            os.makedirs(os.path.join(scene.model_path, "angle_error_vis"), exist_ok=True)
+                            save_path = os.path.join(
+                                scene.model_path, 
+                                "angle_error_vis", 
+                                f"{config['name']}_view_{viewpoint.image_name}_iter{iteration}.png"
+                            )
+                            save_angle_error_heatmap(angle_error_np, save_path)
+                            
                         if iteration == testing_iterations[0]:
                             tb_writer.add_images(
                                 f"{config['name']}_view_{viewpoint.image_name}_{idx}/ground_truth",
@@ -737,7 +858,7 @@ if __name__ == "__main__":
         "--test_iterations",
         nargs="+",
         type=int,
-        default=[7_000, 30_000, 37_000],
+        default=[7_000, 14_000, 16_000, 30_000, 37_000],
     )
     parser.add_argument(
         "--save_iterations",
@@ -750,6 +871,7 @@ if __name__ == "__main__":
     parser.add_argument("--start_checkpoint", type=str, default=None, help="The path to the checkpoint to load.")
     parser.add_argument("--pbr_iteration", default=30_000, type=int, help="The iteration to begin the pb.r learning (Deomposition Stage in the paper)")
     parser.add_argument("--normal_tv", default=5.0, type=float, help="The weight of TV loss on predicted normal map.")
+    parser.add_argument("--normal_loss_weight", default=1.0, type=float, help="The weight of empirical normal matching loss.")
     parser.add_argument("--brdf_tv", default=1.0, type=float, help="The weight of TV loss on predicted BRDF (material) map.")
     parser.add_argument("--env_tv", default=0.01, type=float, help="The weight of TV loss on Environment Map.")
     parser.add_argument("--bound", default=1.5, type=float, help="The valid bound of occlusion volumes.")
@@ -783,6 +905,7 @@ if __name__ == "__main__":
         tone=args.tone,
         gamma=args.gamma,
         normal_tv_weight=args.normal_tv,
+        normal_loss_weight=args.normal_loss_weight,
         brdf_tv_weight=args.brdf_tv,
         env_tv_weight=args.env_tv,
         bound=args.bound,

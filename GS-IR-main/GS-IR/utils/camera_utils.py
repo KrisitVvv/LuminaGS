@@ -61,6 +61,15 @@ def loadCam(args: GroupParams, id: int, cam_info: CameraInfo, resolution_scale: 
     if resized_image_rgb.shape[0] == 4:
         loaded_mask = resized_image_rgb[3:4, ...]
 
+    gt_normal_tensor = None
+    if hasattr(cam_info, "gt_normal") and cam_info.gt_normal is not None:
+        import torch.nn.functional as F
+        normal_tensor = cam_info.gt_normal.clone()
+        # Normal is already [3, H, W] from the new imageio reader
+        normal_tensor = normal_tensor.unsqueeze(0)
+        normal_tensor = F.interpolate(normal_tensor, size=(resolution[1], resolution[0]), mode="bilinear", align_corners=False)
+        gt_normal_tensor = normal_tensor.squeeze(0)
+
     return Camera(
         colmap_id=cam_info.uid,
         R=cam_info.R,
@@ -72,6 +81,7 @@ def loadCam(args: GroupParams, id: int, cam_info: CameraInfo, resolution_scale: 
         image_name=cam_info.image_name,
         uid=id,
         data_device=args.data_device,
+        gt_normal=gt_normal_tensor,
     )
 
 

@@ -344,22 +344,21 @@ class GaussianModel:
         dtype_full = [(attribute, "f4") for attribute in self.construct_list_of_attributes()]
 
         elements = np.empty(xyz.shape[0], dtype=dtype_full)
-        attributes = np.concatenate(
-            (
-                xyz,
-                f_dc,
-                f_rest,
-                opacities,
-                normal,
-                albedo,
-                roughness,
-                metallic,
-                scale,
-                rotation,
-            ),
-            axis=1,
-        )
-        elements[:] = list(map(tuple, attributes))
+        
+        # 🚀 优化：基于列的零拷贝强转并逐字段映射写入结构化数组
+        # 规避原版使用 np.concatenate + list(map(tuple)) 导致极高的内存（乃至显存虚拟交换）溢出
+        attributes = [xyz, f_dc, f_rest, opacities, normal, albedo, roughness, metallic, scale, rotation]
+        
+        col_idx = 0
+        for attr in attributes:
+            if len(attr.shape) == 1:
+                elements[dtype_full[col_idx][0]] = attr
+                col_idx += 1
+            else:
+                for j in range(attr.shape[1]):
+                    elements[dtype_full[col_idx][0]] = attr[:, j]
+                    col_idx += 1
+
         el = PlyElement.describe(elements, "vertex")
         PlyData([el]).write(path)
 

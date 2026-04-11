@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Dict, List, NamedTuple, Optional, Tuple
 
 import numpy as np
+import torch
 from PIL import Image
 from plyfile import PlyData, PlyElement
 
@@ -44,6 +45,7 @@ class CameraInfo(NamedTuple):
     image_name: str
     width: int
     height: int
+    gt_normal: torch.Tensor = None
 
 
 class SceneInfo(NamedTuple):
@@ -260,6 +262,23 @@ def readCamerasFromTransforms(
         FovY = fovy
         FovX = fovx
 
+        os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "1"
+        import imageio.v3 as iio
+        
+        view_dir = os.path.dirname(image_path)
+        normal_path = os.path.join(view_dir, "normal.exr")
+        if os.path.exists(normal_path):
+            # imageio 读取 EXR 天然就是最纯正的 RGB 顺序和 FP32 精度，绝不乱转通道！
+            normal_data = iio.imread(normal_path)  # 形状为 [H, W, 3] 或 [H, W, 4]
+            
+            # 防御性编程：如果是 RGBA (4通道)，只取前 3 个通道 (RGB)
+            if normal_data.shape[-1] == 4:
+                normal_data = normal_data[:, :, :3]
+                
+            gt_normal = torch.from_numpy(normal_data).permute(2, 0, 1).float() # 保证 [3, H, W]
+        else:
+            gt_normal = None
+
         cam_infos.append(
             CameraInfo(
                 uid=idx,
@@ -272,6 +291,7 @@ def readCamerasFromTransforms(
                 image_name=image_name,
                 width=image.size[0],
                 height=image.size[1],
+                gt_normal=gt_normal,
             )
         )
 
