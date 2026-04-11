@@ -262,95 +262,62 @@ def training(
         normal_loss = 0.0
         if iteration <= pbr_iteration:
             loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
-            # 【新增】渐进式混合监督逻辑
-            # 前期（<15000迭代）：用原版自监督（深度推导法线），保证几何自洽
-            if iteration < 15000:
+            # 【修改】渐进式混合监督逻辑
+            if iteration < 10000:
+                # 前期（<10000迭代）：纯自监督，保证几何初始化
                 normal_map_from_depth = rendering_result["normal_map_from_depth"]
                 mask = rendering_result["normal_from_depth_mask"]
                 normal_loss = F.l1_loss(normal_map[:, mask], normal_map_from_depth[:, mask])
-                # 【新增】打印L1损失数值
-                if iteration == 14999:
-                    print(f"[DEBUG] Iteration {iteration}, normal_loss_weight = {normal_loss_weight}")
-                    print(f"[DEBUG] Last L1 loss: {normal_loss.item()}")
-            # 后期（≥15000迭代）：切换为GT法线监督，提升精度
-            else:
+            elif 10000 <= iteration < 15000:
+                # 中期（10000-15000迭代）：混合监督，权重线性增加
+                normal_map_from_depth = rendering_result["normal_map_from_depth"]
+                mask = rendering_result["normal_from_depth_mask"]
+                self_supervised_loss = F.l1_loss(normal_map[:, mask], normal_map_from_depth[:, mask])
+                
                 if hasattr(viewpoint_cam, "gt_normal") and viewpoint_cam.gt_normal is not None:
-                    # 1. 原始读取：获取 imageio 读入的 GT 法线
-                    orig_gt_normal_map = viewpoint_cam.gt_normal.cuda()
+                    gt_normal_map = viewpoint_cam.gt_normal.cuda()
+                    gt_normal_map = F.normalize(gt_normal_map, p=2, dim=0, eps=1e-6)
+                    mask_gt = (viewpoint_cam.gt_alpha_mask.cuda() > 0.5).squeeze(0)
+                    normal_map_norm = F.normalize(normal_map, p=2, dim=0, eps=1e-6)
+                    pred_normal_masked = normal_map_norm[:, mask_gt]
+                    gt_normal_masked = gt_normal_map[:, mask_gt]
                     
-                    # 2. 直接安全归一化 (防 NaN)
-                    orig_gt_normal_map = F.normalize(orig_gt_normal_map, p=2, dim=0, eps=1e-6)
-
-                    # 3. 截断掩码与归一化预测法线
-                    mask = (viewpoint_cam.gt_alpha_mask.cuda() > 0.5).squeeze(0)
-                    normal_map = F.normalize(normal_map, p=2, dim=0, eps=1e-6)
-                    pred_normal_masked = normal_map[:, mask]  # [3, N]
-
-                    # 【诊断逻辑】在15000步打印不同坐标系组合的Loss，使用.clone()防污染
-                    if iteration == 15000:
-                        print(f"\n[DEBUG] --- Iteration {iteration} Normal Coordinate Diagnostics ---")
-                        
-                        # (A) 纯基准 (未翻转)
-                        gt_pure = orig_gt_normal_map[:, mask]
-                        loss_pure = (1.0 - torch.clamp(torch.sum(pred_normal_masked * gt_pure, dim=0), -1.0, 1.0)).mean().item()
-                        print(f"[DEBUG] Baseline (No flip): {loss_pure:.4f}")
-                        
-                        # (B) 翻转X轴
-                        gt_x = orig_gt_normal_map.clone()
-                        gt_x[0] = -gt_x[0]
-                        loss_x = (1.0 - torch.clamp(torch.sum(pred_normal_masked * gt_x[:, mask], dim=0), -1.0, 1.0)).mean().item()
-                        print(f"[DEBUG] Flip X axis:      {loss_x:.4f}")
-                        
-                        # (C) 翻转Y轴
-                        gt_y = orig_gt_normal_map.clone()
-                        gt_y[1] = -gt_y[1]
-                        loss_y = (1.0 - torch.clamp(torch.sum(pred_normal_masked * gt_y[:, mask], dim=0), -1.0, 1.0)).mean().item()
-                        print(f"[DEBUG] Flip Y axis:      {loss_y:.4f}")
-                        
-                        # (D) 翻转Z轴
-                        gt_z = orig_gt_normal_map.clone()
-                        gt_z[2] = -gt_z[2]
-                        loss_z = (1.0 - torch.clamp(torch.sum(pred_normal_masked * gt_z[:, mask], dim=0), -1.0, 1.0)).mean().item()
-                        print(f"[DEBUG] Flip Z axis:      {loss_z:.4f}")
-                        
-                        # (E) 翻转X和Y轴
-                        gt_xy = orig_gt_normal_map.clone()
-                        gt_xy[0] = -gt_xy[0]
-                        gt_xy[1] = -gt_xy[1]
-                        loss_xy = (1.0 - torch.clamp(torch.sum(pred_normal_masked * gt_xy[:, mask], dim=0), -1.0, 1.0)).mean().item()
-                        print(f"[DEBUG] Flip X and Y:     {loss_xy:.4f}")
-
-                        # (F) 翻转X和Z轴
-                        gt_xz = orig_gt_normal_map.clone()
-                        gt_xz[0] = -gt_xz[0]
-                        gt_xz[2] = -gt_xz[2]
-                        loss_xz = (1.0 - torch.clamp(torch.sum(pred_normal_masked * gt_xz[:, mask], dim=0), -1.0, 1.0)).mean().item()
-                        print(f"[DEBUG] Flip X and Z:     {loss_xz:.4f}")
-                        
-                        # (G) 翻转Y和Z轴
-                        gt_yz = orig_gt_normal_map.clone()
-                        gt_yz[1] = -gt_yz[1]
-                        gt_yz[2] = -gt_yz[2]
-                        loss_yz = (1.0 - torch.clamp(torch.sum(pred_normal_masked * gt_yz[:, mask], dim=0), -1.0, 1.0)).mean().item()
-                        print(f"[DEBUG] Flip Y and Z:     {loss_yz:.4f}")
-
-                        # (H) 全局取反
-                        gt_inv = -orig_gt_normal_map.clone()
-                        loss_inv = (1.0 - torch.clamp(torch.sum(pred_normal_masked * gt_inv[:, mask], dim=0), -1.0, 1.0)).mean().item()
-                        print(f"[DEBUG] Invert all (-X,-Y,-Z): {loss_inv:.4f}")
-                        
-                        print("[DEBUG] ---------------------------------------------------------\n")
-
-                    # 4. 正常训练流程：暂用原始未翻转的计算以维持逻辑完整性进行继续训练
-                    gt_normal_masked = orig_gt_normal_map[:, mask]
+                    # L1损失（主），余弦损失（辅）
+                    l1_loss_gt = F.l1_loss(pred_normal_masked, gt_normal_masked)
                     dot_product = torch.sum(pred_normal_masked * gt_normal_masked, dim=0)
                     dot_product = torch.clamp(dot_product, -1.0, 1.0)
-                    normal_loss = (1.0 - dot_product).mean()
+                    cosine_loss = (1.0 - dot_product).mean()
+                    gt_loss = l1_loss_gt + 0.1 * cosine_loss
+                else:
+                    gt_loss = self_supervised_loss
+                
+                # 权重从0线性增加到1 (用于在两个loss之间平滑插值/过过渡)
+                alpha = (iteration - 10000) / 5000.0
+                normal_loss = (1.0 - alpha) * self_supervised_loss + alpha * gt_loss
+            else:
+                # 后期（≥15000迭代）：L1为主，余弦为辅
+                if hasattr(viewpoint_cam, "gt_normal") and viewpoint_cam.gt_normal is not None:
+                    gt_normal_map = viewpoint_cam.gt_normal.cuda()
+                    gt_normal_map = F.normalize(gt_normal_map, p=2, dim=0, eps=1e-6)
+                    mask = (viewpoint_cam.gt_alpha_mask.cuda() > 0.5).squeeze(0)
+                    normal_map_norm = F.normalize(normal_map, p=2, dim=0, eps=1e-6)
+                    pred_normal_masked = normal_map_norm[:, mask]
+                    gt_normal_masked = gt_normal_map[:, mask]
+                    
+                    # L1损失（主损失，权重1.0）
+                    l1_loss_gt = F.l1_loss(pred_normal_masked, gt_normal_masked)
+                    # 余弦损失（辅助损失，权重0.1）
+                    dot_product = torch.sum(pred_normal_masked * gt_normal_masked, dim=0)
+                    dot_product = torch.clamp(dot_product, -1.0, 1.0)
+                    cosine_loss = (1.0 - dot_product).mean()
+                    
+                    # 混合损失
+                    normal_loss = l1_loss_gt + 0.1 * cosine_loss
                 else:
                     normal_map_from_depth = rendering_result["normal_map_from_depth"]
                     mask = rendering_result["normal_from_depth_mask"]
                     normal_loss = F.l1_loss(normal_map[:, mask], normal_map_from_depth[:, mask])
-                
+
             loss += normal_loss_weight * normal_loss
             normal_tv_loss = get_tv_loss(gt_image, normal_map, pad=1, step=1)
             loss += normal_tv_loss * normal_tv_weight
