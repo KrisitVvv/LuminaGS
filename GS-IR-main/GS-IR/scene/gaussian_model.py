@@ -604,9 +604,18 @@ class GaussianModel:
         N: int = 2,
     ) -> None:
         n_init_points = self.get_xyz.shape[0]
+        
+        # 【进阶优化】法线引导的密度化（Split也应当对齐这一逻辑）
+        xyz_grad_norm = torch.norm(grads, dim=-1)
+        if self._normal is not None and self._normal.grad is not None:
+            normal_grad_norm = torch.norm(self._normal.grad, dim=-1)
+            combined_grad_norm = xyz_grad_norm + 0.5 * normal_grad_norm
+        else:
+            combined_grad_norm = xyz_grad_norm
+
         # Extract points that satisfy the gradient condition
         padded_grad = torch.zeros((n_init_points), device="cuda")
-        padded_grad[: grads.shape[0]] = grads.squeeze()
+        padded_grad[: grads.shape[0]] = combined_grad_norm.squeeze()
         selected_pts_mask = torch.where(padded_grad >= grad_threshold, True, False)
         selected_pts_mask = torch.logical_and(
             selected_pts_mask,
@@ -656,8 +665,18 @@ class GaussianModel:
         grad_threshold: float,
         scene_extent: float,
     ) -> None:
+        # 【进阶优化】法线引导的密度化：在位置梯度的基础上加入法线梯度
+        xyz_grad_norm = torch.norm(grads, dim=-1)
+        
+        if self._normal is not None and self._normal.grad is not None:
+            normal_grad_norm = torch.norm(self._normal.grad, dim=-1)
+            # 增加法线梯度影响，使其在凸点、边缘等高频误差区域主动触发增殖
+            combined_grad_norm = xyz_grad_norm + 0.5 * normal_grad_norm 
+        else:
+            combined_grad_norm = xyz_grad_norm
+
         # Extract points that satisfy the gradient condition
-        selected_pts_mask = torch.where(torch.norm(grads, dim=-1) >= grad_threshold, True, False)
+        selected_pts_mask = torch.where(combined_grad_norm >= grad_threshold, True, False)
         selected_pts_mask = torch.logical_and(
             selected_pts_mask,
             torch.max(self.get_scaling, dim=1).values <= self.percent_dense * scene_extent,

@@ -407,6 +407,24 @@ def training(
                     save_adaptive_weight_map(adaptive_weight_h, adaptive_weight_w, save_path)
 
         else:  # NOTE: PBR
+            # 【取消】暂时恢复原版逻辑，不冻结几何参数
+            # if iteration == pbr_iteration + 1:
+            #     # 几何参数（决定法线和几何形状）
+            #     gaussians._xyz.requires_grad = False
+            #     gaussians._rotation.requires_grad = False
+            #     gaussians._scaling.requires_grad = False
+            #     gaussians._opacity.requires_grad = False
+            #     gaussians._features_dc.requires_grad = False
+            #     gaussians._features_rest.requires_grad = False
+            #     
+            #     # BRDF参数（决定材质保底）
+            #     gaussians._albedo.requires_grad = True
+            #     gaussians._roughness.requires_grad = True
+            #     if hasattr(gaussians, '_metallic'):
+            #         gaussians._metallic.requires_grad = True
+            #         
+            #     print(f"\n[ITER {iteration}] 冻结高斯几何参数（法线固定），仅优化BRDF材质和光照")
+
             if occlusion_flag and indirect:
                 filepath = os.path.join(os.path.dirname(checkpoint_path), "occlusion_volumes.pth")
                 print(f"begin to load occlusion volumes from {filepath}")
@@ -566,9 +584,11 @@ def training(
 
             # Optimizer step
             if iteration < opt.iterations:
+                # 恢复原版逻辑：让 PyTorch 自动通过 requires_grad 的 True/False 来只更新材质，不更新几何
                 gaussians.optimizer.step()
                 gaussians.optimizer.zero_grad(set_to_none=True)
                 gaussians.update_learning_rate(iteration)
+                
                 if iteration >= pbr_iteration:
                     light_optimizer.step()
                     light_optimizer.zero_grad(set_to_none=True)
