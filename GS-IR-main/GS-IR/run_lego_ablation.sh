@@ -14,7 +14,7 @@ for n_tv in "${NORMAL_TVS[@]}"; do
     for nl_w in "${NORMAL_LOSS_WEIGHTS[@]}"; do
         
         # OUTPUT_PATH="outputs/lego_gt_n${n_tv}_nl${nl_w}"
-        OUTPUT_PATH="outputs/lego_step2_lowercosine_advanced"
+        OUTPUT_PATH="outputs/lego_step3_autoTVloss_adapted"
         echo "=========================================================================="
         echo "🚀 开始消融实验: $OUTPUT_PATH"
         echo "参数设置: --normal_tv ${n_tv} | --normal_loss_weight ${nl_w}"

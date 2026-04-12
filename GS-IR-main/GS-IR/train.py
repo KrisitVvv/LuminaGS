@@ -65,6 +65,73 @@ def get_tv_loss(
     return tv_loss
 
 
+def get_perfect_adaptive_tv_loss(
+    gt_image: torch.Tensor,        # [3, H, W] 输入RGB图像
+    prediction: torch.Tensor,      # [3, H, W] 预测法线图
+    base_tv_weight: float = 1.0,   # 【保持默认1.0，因为normal_tv已经是0.3】
+    detail_min_weight: float = 0.02, # 【从0.05降到0.02，进一步保留微小凸点】
+    flat_max_weight: float = 1.0,  # 平坦区域的最大TV权重
+    detail_threshold: float = 0.015, # 【从0.02降到0.015，更多区域被识别为细节】
+    transition_smoothness: float = 0.005, # 过渡区域的平滑度
+) -> torch.Tensor:
+    """
+    完美自适应TV损失（最终修正版）：
+    1. 自动识别细节区域 vs 平坦区域
+    2. 细节区域：TV权重很小，保留细节
+    3. 平坦区域：TV权重很大，抑制噪点
+    4. 过渡区域：平滑过渡，无明显边界
+    5. 【关键修正】删除重复的exp(-rgb_grad)权重，让自适应权重完全主导
+    """
+    # 1. 计算RGB图像的梯度（用于判断细节）
+    rgb_grad_h = gt_image[:, 1:, :] - gt_image[:, :-1, :]  # [3, H-1, W]
+    rgb_grad_h = rgb_grad_h.abs().mean(dim=0, keepdim=True)  # [1, H-1, W]
+    
+    rgb_grad_w = gt_image[:, :, 1:] - gt_image[:, :, :-1]  # [3, H, W-1]
+    rgb_grad_w = rgb_grad_w.abs().mean(dim=0, keepdim=True)  # [1, H, W-1]
+    
+    # 2. 自动识别细节区域 vs 平坦区域 (Sigmoid平滑过渡)
+    adaptive_weight_h = torch.sigmoid(-(rgb_grad_h - detail_threshold) / transition_smoothness)
+    adaptive_weight_h = detail_min_weight + (flat_max_weight - detail_min_weight) * adaptive_weight_h
+    
+    adaptive_weight_w = torch.sigmoid(-(rgb_grad_w - detail_threshold) / transition_smoothness)
+    adaptive_weight_w = detail_min_weight + (flat_max_weight - detail_min_weight) * adaptive_weight_w
+    
+    # 4. 计算预测法线的梯度
+    tv_h = torch.pow(prediction[:, 1:, :] - prediction[:, :-1, :], 2)  # [3, H-1, W]
+    tv_w = torch.pow(prediction[:, :, 1:] - prediction[:, :, :-1], 2)  # [3, H, W-1]
+    
+    # 5. 【关键修正】仅保留自适应权重 × base_tv_weight
+    final_weight_h = adaptive_weight_h * base_tv_weight
+    final_weight_w = adaptive_weight_w * base_tv_weight
+    
+    tv_loss = (tv_h * final_weight_h).mean() + (tv_w * final_weight_w).mean()
+    return tv_loss
+
+
+def save_adaptive_weight_map(
+    adaptive_weight_h: torch.Tensor,  # [1, H-1, W]
+    adaptive_weight_w: torch.Tensor,  # [1, H, W-1]
+    save_path: str = "adaptive_weight_vis.png"
+):
+    """
+    保存自适应权重图，用于调试：
+    - 蓝色：细节区域（权重小）
+    - 红色：平坦区域（权重大）
+    """
+    import matplotlib.pyplot as plt
+    H, W = adaptive_weight_h.shape[1] + 1, adaptive_weight_h.shape[2]
+    weight_map = torch.zeros((1, H, W), device=adaptive_weight_h.device)
+    weight_map[:, :-1, :] = adaptive_weight_h
+    weight_map[:, :, :-1] = torch.max(weight_map[:, :, :-1], adaptive_weight_w)
+    weight_map = (weight_map - weight_map.min()) / (weight_map.max() - weight_map.min() + 1e-6)
+    weight_map_np = weight_map.squeeze().cpu().numpy()
+    
+    plt.imshow(weight_map_np, cmap='jet')
+    plt.colorbar(label='Adaptive TV Weight')
+    plt.savefig(save_path)
+    plt.close()
+
+
 def get_masked_tv_loss(
     mask: torch.Tensor,  # [1, H, W]
     gt_image: torch.Tensor,  # [3, H, W]
@@ -282,12 +349,8 @@ def training(
                     pred_normal_masked = normal_map_norm[:, mask_gt]
                     gt_normal_masked = gt_normal_map[:, mask_gt]
                     
-                    # L1损失（主），余弦损失（辅）
-                    l1_loss_gt = F.l1_loss(pred_normal_masked, gt_normal_masked)
-                    dot_product = torch.sum(pred_normal_masked * gt_normal_masked, dim=0)
-                    dot_product = torch.clamp(dot_product, -1.0, 1.0)
-                    cosine_loss = (1.0 - dot_product).mean()
-                    gt_loss = l1_loss_gt + 0.1 * cosine_loss
+                    # 彻底舍弃余弦损失，在中期纯用 L1 损失进行平滑插值过渡
+                    gt_loss = F.l1_loss(pred_normal_masked, gt_normal_masked)
                 else:
                     gt_loss = self_supervised_loss
                 
@@ -295,7 +358,7 @@ def training(
                 alpha = (iteration - 10000) / 5000.0
                 normal_loss = (1.0 - alpha) * self_supervised_loss + alpha * gt_loss
             else:
-                # 后期（≥15000迭代）：L1为主，余弦为辅
+                # 后期（≥15000迭代）：彻底舍弃余弦损失，由纯L1主导
                 if hasattr(viewpoint_cam, "gt_normal") and viewpoint_cam.gt_normal is not None:
                     gt_normal_map = viewpoint_cam.gt_normal.cuda()
                     gt_normal_map = F.normalize(gt_normal_map, p=2, dim=0, eps=1e-6)
@@ -304,23 +367,44 @@ def training(
                     pred_normal_masked = normal_map_norm[:, mask]
                     gt_normal_masked = gt_normal_map[:, mask]
                     
-                    # L1损失（主损失，权重1.0）
-                    l1_loss_gt = F.l1_loss(pred_normal_masked, gt_normal_masked)
-                    # 余弦损失（辅助损失，权重0.1）
-                    dot_product = torch.sum(pred_normal_masked * gt_normal_masked, dim=0)
-                    dot_product = torch.clamp(dot_product, -1.0, 1.0)
-                    cosine_loss = (1.0 - dot_product).mean()
-                    
-                    # 混合损失
-                    normal_loss = l1_loss_gt + 0.1 * cosine_loss
+                    # 彻底舍弃余弦损失，完全使用 L1 匹配损失
+                    normal_loss = F.l1_loss(pred_normal_masked, gt_normal_masked)
                 else:
                     normal_map_from_depth = rendering_result["normal_map_from_depth"]
                     mask = rendering_result["normal_from_depth_mask"]
                     normal_loss = F.l1_loss(normal_map[:, mask], normal_map_from_depth[:, mask])
 
             loss += normal_loss_weight * normal_loss
-            normal_tv_loss = get_tv_loss(gt_image, normal_map, pad=1, step=1)
+            
+            # 采用全新的完美自适应 TV 损失（平滑与细节保留并存）
+            normal_tv_loss = get_perfect_adaptive_tv_loss(
+                gt_image, 
+                normal_map, 
+                base_tv_weight=1.0,  # 保持1.0，因为--normal_tv已经是0.3
+                detail_min_weight=0.02,  # 从0.05降到0.02，进一步保留微小凸点
+                flat_max_weight=1.0,
+                detail_threshold=0.015,  # 从0.02降到0.015，更多区域被识别为细节
+                transition_smoothness=0.005
+            )
             loss += normal_tv_loss * normal_tv_weight
+
+            # 【新增】可选可视化调试：每5000步保存自适应权重图
+            if iteration % 5000 == 0:
+                with torch.no_grad():
+                    rgb_grad_h = gt_image[:, 1:, :] - gt_image[:, :-1, :]
+                    rgb_grad_h = rgb_grad_h.abs().mean(dim=0, keepdim=True)
+                    rgb_grad_w = gt_image[:, :, 1:] - gt_image[:, :, :-1]
+                    rgb_grad_w = rgb_grad_w.abs().mean(dim=0, keepdim=True)
+                    
+                    adaptive_weight_h = torch.sigmoid(-(rgb_grad_h - 0.015) / 0.005)
+                    adaptive_weight_h = 0.02 + (1.0 - 0.02) * adaptive_weight_h
+                    adaptive_weight_w = torch.sigmoid(-(rgb_grad_w - 0.015) / 0.005)
+                    adaptive_weight_w = 0.02 + (1.0 - 0.02) * adaptive_weight_w
+                    
+                    vis_dir = os.path.join(scene.model_path, "adaptive_weight_vis")
+                    os.makedirs(vis_dir, exist_ok=True)
+                    save_path = os.path.join(vis_dir, f"iter_{iteration}.png")
+                    save_adaptive_weight_map(adaptive_weight_h, adaptive_weight_w, save_path)
 
         else:  # NOTE: PBR
             if occlusion_flag and indirect:
