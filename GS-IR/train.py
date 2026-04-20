@@ -303,6 +303,58 @@ def training(
                 opacity_map = rendering_result["opacity_map"].detach()  # [1, H, W]
                 valid_mask = (opacity_map > 0.5).squeeze(0)  # [H, W] 的真假二值化掩码
                 
+                # === DA3 法线坐标系翻转诊断测试 ===
+                if iteration == 1000:
+                    print(f"\n[DEBUG] --- Iteration {iteration} DA3 Normal Coordinate Diagnostics ---")
+                    
+                    # 1. 提取基础数据
+                    raw_da3_c = viewpoint_cam.da3_normal.clone().detach() # [H, W, 3] 原始相机空间
+                    c2w_matrix = torch.inverse(viewpoint_cam.world_view_transform.T)
+                    R_c2w_test = c2w_matrix[:3, :3] # [3, 3] 旋转矩阵
+                    norm_render_test = F.normalize(normal_map, p=2, dim=0).detach() # [3, H, W] 世界空间
+                    
+                    H_t, W_t = viewpoint_cam.image_height, viewpoint_cam.image_width
+                    
+                    # 2. 定义 8 种翻转组合 (X, Y, Z 乘数)
+                    flips = {
+                        "Baseline (No flip)": [1.0, 1.0, 1.0],
+                        "Flip X axis": [-1.0, 1.0, 1.0],
+                        "Flip Y axis": [1.0, -1.0, 1.0],
+                        "Flip Z axis": [1.0, 1.0, -1.0],
+                        "Flip X and Y": [-1.0, -1.0, 1.0],
+                        "Flip X and Z": [-1.0, 1.0, -1.0],
+                        "Flip Y and Z (OUR CURRENT)": [1.0, -1.0, -1.0],
+                        "Invert all (-X,-Y,-Z)": [-1.0, -1.0, -1.0],
+                    }
+                    
+                    # 3. 遍历测试
+                    for name, signs in flips.items():
+                        # a. 翻转相机空间法线
+                        test_n_c = raw_da3_c.clone()
+                        test_n_c[..., 0] *= signs[0]
+                        test_n_c[..., 1] *= signs[1]
+                        test_n_c[..., 2] *= signs[2]
+                        
+                        # b. 转换到世界坐标系
+                        test_n_w = torch.matmul(test_n_c, R_c2w_test.T) # [H, W, 3]
+                        test_n_w = F.normalize(test_n_w, p=2, dim=-1).permute(2, 0, 1).unsqueeze(0) # [1, 3, H, W]
+                        
+                        # c. 对齐分辨率
+                        if test_n_w.shape[2:] != (H_t, W_t):
+                            test_n_w = F.interpolate(test_n_w, size=(H_t, W_t), mode='nearest')
+                        test_n_w = test_n_w.squeeze(0) # [3, H, W]
+                        
+                        # d. 计算被 Mask 区域的余弦损失
+                        if valid_mask.sum() > 0:
+                            dot_product_test = torch.sum(norm_render_test * test_n_w, dim=0)
+                            loss_val = (1.0 - dot_product_test)[valid_mask].mean().item()
+                        else:
+                            loss_val = float('inf')
+                            
+                        print(f"[DEBUG] {name:<26}: {loss_val:.4f}")
+                    print("[DEBUG] ---------------------------------------------------------\n")
+                # === 测试代码结束 ===
+                
                 # --- 课程学习与先验衰减 (Prior Decay) ---
                 # 0 - 10000 步：DA3 先验主导，压平错误几何
                 if iteration <= 10000:
