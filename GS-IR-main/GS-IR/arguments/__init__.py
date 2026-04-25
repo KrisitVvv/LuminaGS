@@ -57,6 +57,8 @@ class ModelParams(ParamGroup):
         self._images = "images"
         self._resolution = -1
         self._white_background = False
+        self.use_da3_normal = False
+        self.da3_normal_root = ""
         self.data_device = "cuda"
         self.eval = False
         super().__init__(parser, "Loading Parameters", sentinel)

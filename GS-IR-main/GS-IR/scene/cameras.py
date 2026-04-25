@@ -33,6 +33,8 @@ class Camera(nn.Module):
         scale: float = 1.0,
         data_device: str = "cuda",
         gt_normal: Optional[torch.Tensor] = None,
+        da3_normal_conf: Optional[torch.Tensor] = None,
+        da3_depth: Optional[torch.Tensor] = None,
     ) -> None:
         super(Camera, self).__init__()
 
@@ -62,6 +64,8 @@ class Camera(nn.Module):
             self.gt_alpha_mask = torch.ones((1, self.image_height, self.image_width))
             
         self.gt_normal = gt_normal
+        self.da3_normal_conf = da3_normal_conf
+        self.da3_depth = da3_depth
         # if gt_alpha_mask is not None:
         #     self.original_image *= gt_alpha_mask.to(self.data_device)
         # else:

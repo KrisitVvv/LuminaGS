@@ -46,6 +46,8 @@ class CameraInfo(NamedTuple):
     width: int
     height: int
     gt_normal: torch.Tensor = None
+    da3_normal_conf: torch.Tensor = None
+    da3_depth: torch.Tensor = None
 
 
 class SceneInfo(NamedTuple):
@@ -224,7 +226,12 @@ def readColmapSceneInfo(path: str, images: str, eval: bool, llffhold: int = 8) -
 
 
 def readCamerasFromTransforms(
-    path: str, transformsfile: str, white_background: bool, extension: str = ".png"
+    path: str, 
+    transformsfile: str, 
+    white_background: bool, 
+    extension: str = ".png",
+    use_da3_normal: bool = False,
+    da3_normal_root: str = ""
 ) -> List[CameraInfo]:
     cam_infos = []
 
@@ -264,20 +271,81 @@ def readCamerasFromTransforms(
 
         os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "1"
         import imageio.v3 as iio
+        import torch.nn.functional as F
         
-        view_dir = os.path.dirname(image_path)
-        normal_path = os.path.join(view_dir, "normal.exr")
-        if os.path.exists(normal_path):
-            # imageio 读取 EXR 天然就是最纯正的 RGB 顺序和 FP32 精度，绝不乱转通道！
-            normal_data = iio.imread(normal_path)  # 形状为 [H, W, 3] 或 [H, W, 4]
+        if use_da3_normal:
+            # === 核心修正：适配 Marigold 的独立文件夹结构 ===
+            # 在脚本中传入的 da3_normal_root 应该是 "marigold_final" 的路径
+            rel_path = os.path.relpath(image_path, path)
+            rel_dir = os.path.dirname(rel_path)
+
+            # 1. 拼接法线路径：marigold_final/normals_npy/train_000_rgba_normals.npy
+            normal_path = os.path.join(da3_normal_root, "normals_npy", f"{image_name}_rgba_normals.npy")
+
+            # 2. 拼接置信度路径：marigold_final/conf_npy/train_000_rgba_conf.npy
+            conf_path = os.path.join(da3_normal_root, "conf_npy", f"{image_name}_rgba_conf.npy")
+
+            # 3. 深度路径（如果需要，假设存放在 depth_npy 下）
+            depth_path = os.path.join(da3_normal_root, "depth_npy", f"{image_name}_rgba_depth.npy")
+            # 如果没有专门的 depth_npy，保留原来的 fallback 逻辑
+            if not os.path.exists(depth_path):
+                 depth_path = os.path.join(da3_normal_root, rel_dir, "depth.npy")
+        else:
+            view_dir = os.path.dirname(image_path)
+            normal_path = os.path.join(view_dir, "normal.exr")
+            conf_path = os.path.join(view_dir, "conf.exr")
+            depth_path = os.path.join(view_dir, "depth.exr")
             
-            # 防御性编程：如果是 RGBA (4通道)，只取前 3 个通道 (RGB)
-            if normal_data.shape[-1] == 4:
-                normal_data = normal_data[:, :, :3]
+        if os.path.exists(normal_path):
+            if normal_path.endswith(".exr"):
+                # imageio 读取 EXR 天然就是最纯正的 RGB 顺序和 FP32 精度，绝不乱转通道！
+                normal_data = iio.imread(normal_path)  # 形状为 [H, W, 3] 或 [H, W, 4]
+            elif normal_path.endswith(".npy"):
+                normal_data = np.load(normal_path, mmap_mode="r")
+            else:
+                normal_data = None
                 
-            gt_normal = torch.from_numpy(normal_data).permute(2, 0, 1).float() # 保证 [3, H, W]
+            if normal_data is not None:
+                # 防御性编程：如果是 RGBA (4通道)，只取前 3 个通道 (RGB)
+                if normal_data.shape[-1] == 4:
+                    normal_data = normal_data[:, :, :3]
+                gt_normal = torch.from_numpy(normal_data).permute(2, 0, 1).float() # 保证 [3, H, W]
+                # 确保法线归一化 (无论是否是 DA3，保持物理意义正确)
+                gt_normal = F.normalize(gt_normal, p=2, dim=0, eps=1e-6)
+            else:
+                gt_normal = None
         else:
             gt_normal = None
+            
+        # 加载DA3置信度图
+        da3_normal_conf = None
+        if os.path.exists(conf_path):
+            if conf_path.endswith(".exr"):
+                conf_data = iio.imread(conf_path)
+            elif conf_path.endswith(".npy"):
+                conf_data = np.load(conf_path, mmap_mode="r")
+            else:
+                conf_data = None
+            
+            if conf_data is not None:
+                if len(conf_data.shape) == 3:
+                    conf_data = conf_data[:, :, 0]  # 取单通道
+                da3_normal_conf = torch.from_numpy(conf_data).unsqueeze(0).float()  # [1, H, W]
+
+        # 加载DA3深度图
+        da3_depth = None
+        if os.path.exists(depth_path):
+            if depth_path.endswith(".exr"):
+                depth_data = iio.imread(depth_path)
+            elif depth_path.endswith(".npy"):
+                depth_data = np.load(depth_path, mmap_mode="r")
+            else:
+                depth_data = None
+                
+            if depth_data is not None:
+                if len(depth_data.shape) == 3:
+                    depth_data = depth_data[:, :, 0]  # 取单通道
+                da3_depth = torch.from_numpy(depth_data).unsqueeze(0).float()  # [1, H, W]
 
         cam_infos.append(
             CameraInfo(
@@ -292,6 +360,8 @@ def readCamerasFromTransforms(
                 width=image.size[0],
                 height=image.size[1],
                 gt_normal=gt_normal,
+                da3_normal_conf=da3_normal_conf,
+                da3_depth=da3_depth,
             )
         )
 
@@ -299,15 +369,26 @@ def readCamerasFromTransforms(
 
 
 def readNerfSyntheticInfo(
-    path: str, white_background: bool, eval: bool, extension: str = ".png"
+    path: str, 
+    white_background: bool, 
+    eval: bool, 
+    extension: str = ".png",
+    use_da3_normal: bool = False,
+    da3_normal_root: str = ""
 ) -> SceneInfo:
     print("Reading Training Transforms")
     train_cam_infos = readCamerasFromTransforms(
-        path, "transforms_train.json", white_background, extension
+        path, "transforms_train.json", white_background, extension,
+        use_da3_normal=use_da3_normal,
+        da3_normal_root=da3_normal_root
     )
     print("Reading Test Transforms")
     test_cam_infos = readCamerasFromTransforms(
-        path, "transforms_test.json", white_background, extension
+        path, "transforms_test.json", white_background, extension,
+        # 评估阶段固定使用数据集自带 GT normal/conf/depth（view_dir 下的 .exr）
+        # 避免测试集被 Marigold 伪真值覆盖，确保 angle error 热力图基于真实 GT。
+        use_da3_normal=False,
+        da3_normal_root=da3_normal_root
     )
 
     if not eval:

@@ -69,6 +69,22 @@ def loadCam(args: GroupParams, id: int, cam_info: CameraInfo, resolution_scale: 
         normal_tensor = normal_tensor.unsqueeze(0)
         normal_tensor = F.interpolate(normal_tensor, size=(resolution[1], resolution[0]), mode="bilinear", align_corners=False)
         gt_normal_tensor = normal_tensor.squeeze(0)
+        
+    da3_normal_conf_tensor = None
+    if hasattr(cam_info, "da3_normal_conf") and cam_info.da3_normal_conf is not None:
+        import torch.nn.functional as F
+        conf_tensor = cam_info.da3_normal_conf.clone()
+        conf_tensor = conf_tensor.unsqueeze(0)
+        conf_tensor = F.interpolate(conf_tensor, size=(resolution[1], resolution[0]), mode="bilinear", align_corners=False)
+        da3_normal_conf_tensor = conf_tensor.squeeze(0)
+
+    da3_depth_tensor = None
+    if hasattr(cam_info, "da3_depth") and cam_info.da3_depth is not None:
+        import torch.nn.functional as F
+        depth_tensor = cam_info.da3_depth.clone()
+        depth_tensor = depth_tensor.unsqueeze(0)
+        depth_tensor = F.interpolate(depth_tensor, size=(resolution[1], resolution[0]), mode="bilinear", align_corners=False)
+        da3_depth_tensor = depth_tensor.squeeze(0)
 
     return Camera(
         colmap_id=cam_info.uid,
@@ -82,6 +98,8 @@ def loadCam(args: GroupParams, id: int, cam_info: CameraInfo, resolution_scale: 
         uid=id,
         data_device=args.data_device,
         gt_normal=gt_normal_tensor,
+        da3_normal_conf=da3_normal_conf_tensor,
+        da3_depth=da3_depth_tensor,
     )
 
 
