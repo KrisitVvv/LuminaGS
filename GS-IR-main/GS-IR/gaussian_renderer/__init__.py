@@ -19,6 +19,7 @@ from arguments import GroupParams
 from scene.cameras import Camera
 from scene.gaussian_model import GaussianModel
 from utils.sh_utils import eval_sh
+from utils.general_utils import build_rotation
 
 
 def render(
@@ -89,6 +90,15 @@ def render(
     else:
         scales = pc.get_scaling
         rotations = pc.get_rotation
+
+    # GaussianShader-style shortest-axis normal extraction from scaling + rotation.
+    # This aligns gaussian physical normal with the minimum scale axis.
+    scales_for_normal = pc.get_scaling if scales is None else scales
+    rotations_for_normal = pc.get_rotation if rotations is None else rotations
+    rotations_mat = build_rotation(rotations_for_normal)
+    min_scales = torch.argmin(scales_for_normal, dim=1)
+    indices = torch.arange(min_scales.shape[0], device=min_scales.device)
+    normal = F.normalize(rotations_mat[indices, :, min_scales], p=2, dim=1)
 
     # If precomputed colors are provided, use them. Otherwise, if it is desired to precompute colors
     # from SHs in Python, do it. If not, then SH -> RGB conversion will be done by rasterizer.

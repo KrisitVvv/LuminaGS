@@ -96,6 +96,9 @@ class OptimizationParams(ParamGroup):
         self.densify_until_iter = 15_000
         self.densify_grad_threshold = 0.0002
         self.random_background = False
+        self.max_prior_alpha = 0.5
+        self.flatten_loss = False
+        self.lambda_flatten = 0.001
         super().__init__(parser, "Optimization Parameters")
 
 

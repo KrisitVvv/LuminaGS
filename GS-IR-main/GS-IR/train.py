@@ -434,64 +434,65 @@ def training(
                 soft_weight = torch.ones_like(final_mask, dtype=torch.float32)
 
             # ==========================================================
-            # [Task 2 & 3] 坐标系对齐、双分量 Loss 与 渐进式调度
+            # [Task 2 & 3] 坐标系对齐、双分量 Loss 与 参数化调度
             # ==========================================================
-            if iteration < 5000:
-                # 前期（<5000迭代）：纯自监督，防止被先验强行拉扯
-                normal_loss = F.l1_loss(normal_map[:, final_mask], normal_map_from_depth[:, final_mask])
+            self_supervised_loss = F.l1_loss(normal_map[:, final_mask], normal_map_from_depth[:, final_mask])
+
+            if hasattr(viewpoint_cam, "gt_normal") and viewpoint_cam.gt_normal is not None:
+                marigold_normal = viewpoint_cam.gt_normal.cuda().clone()
+
+                # Marigold 是 +X, -Y, -Z 坐标系，翻转 Y 和 Z 对齐 GS-IR
+                marigold_normal[1, :, :] = -marigold_normal[1, :, :]
+                marigold_normal[2, :, :] = -marigold_normal[2, :, :]
+                marigold_normal = F.normalize(marigold_normal, p=2, dim=0, eps=1e-6)
+
+                normal_map_norm = F.normalize(normal_map, p=2, dim=0, eps=1e-6)
+
+                # 提取有效像素
+                pred_normal_masked = normal_map_norm[:, final_mask]  # [3, N]
+                gt_normal_masked = marigold_normal[:, final_mask]  # [3, N]
+                weight_masked = soft_weight[final_mask]  # [N]
+
+                # OOM 保护：可选随机像素采样，仅在有效像素过多时启用
+                if normal_loss_pixel_sampling and weight_masked.numel() > 0:
+                    sample_count = int(weight_masked.numel() * normal_loss_sample_ratio)
+                    sample_count = max(1, min(normal_loss_sample_cap, sample_count))
+                    if sample_count < weight_masked.numel():
+                        sample_idx = torch.randperm(weight_masked.numel(), device=weight_masked.device)[:sample_count]
+                        pred_normal_masked = pred_normal_masked[:, sample_idx]
+                        gt_normal_masked = gt_normal_masked[:, sample_idx]
+                        weight_masked = weight_masked[sample_idx]
+
+                # GaussianPro 风格 L1 + Cosine 双分量 Loss
+                l1_err = torch.abs(pred_normal_masked - gt_normal_masked).sum(dim=0)  # [N]
+                cos_err = 1.0 - torch.clamp(
+                    torch.sum(pred_normal_masked * gt_normal_masked, dim=0), -1.0, 1.0
+                )  # [N]
+
+                # L1 和 Cosine 权重
+                lambda_l1, lambda_cos = 0.8, 0.2
+                gt_loss = (weight_masked * (lambda_l1 * l1_err + lambda_cos * cos_err)).mean()
             else:
-                # 中后期：引入 Marigold 强先验
-                self_supervised_loss = F.l1_loss(normal_map[:, final_mask], normal_map_from_depth[:, final_mask])
+                gt_loss = self_supervised_loss
 
-                if hasattr(viewpoint_cam, "gt_normal") and viewpoint_cam.gt_normal is not None:
-                    marigold_normal = viewpoint_cam.gt_normal.cuda().clone()
-
-                    # Marigold 是 +X, -Y, -Z 坐标系，翻转 Y 和 Z 对齐 GS-IR
-                    marigold_normal[1, :, :] = -marigold_normal[1, :, :]
-                    marigold_normal[2, :, :] = -marigold_normal[2, :, :]
-                    marigold_normal = F.normalize(marigold_normal, p=2, dim=0, eps=1e-6)
-
-                    normal_map_norm = F.normalize(normal_map, p=2, dim=0, eps=1e-6)
-
-                    # 提取有效像素
-                    pred_normal_masked = normal_map_norm[:, final_mask]  # [3, N]
-                    gt_normal_masked = marigold_normal[:, final_mask]  # [3, N]
-                    weight_masked = soft_weight[final_mask]  # [N]
-
-                    # OOM 保护：可选随机像素采样，仅在有效像素过多时启用
-                    if normal_loss_pixel_sampling and weight_masked.numel() > 0:
-                        sample_count = int(weight_masked.numel() * normal_loss_sample_ratio)
-                        sample_count = max(1, min(normal_loss_sample_cap, sample_count))
-                        if sample_count < weight_masked.numel():
-                            sample_idx = torch.randperm(weight_masked.numel(), device=weight_masked.device)[:sample_count]
-                            pred_normal_masked = pred_normal_masked[:, sample_idx]
-                            gt_normal_masked = gt_normal_masked[:, sample_idx]
-                            weight_masked = weight_masked[sample_idx]
-
-                    # GaussianPro 风格 L1 + Cosine 双分量 Loss
-                    l1_err = torch.abs(pred_normal_masked - gt_normal_masked).sum(dim=0)  # [N]
-                    cos_err = 1.0 - torch.clamp(
-                        torch.sum(pred_normal_masked * gt_normal_masked, dim=0), -1.0, 1.0
-                    )  # [N]
-
-                    # L1 和 Cosine 权重
-                    lambda_l1, lambda_cos = 0.8, 0.2
-                    gt_loss = (weight_masked * (lambda_l1 * l1_err + lambda_cos * cos_err)).mean()
-                else:
-                    gt_loss = self_supervised_loss
-
-                # 渐进式门控调度 (Warm-up)
-                if iteration < 15000:
-                    # 5000 -> 15000：先验权重从 0 线性增加到 1
-                    alpha = (iteration - 5000) / 10000.0
-                    normal_loss = (1.0 - alpha) * self_supervised_loss + alpha * gt_loss
-                elif iteration < 25000:
-                    # 15000 -> 25000：完全由 Marigold 主导
-                    normal_loss = gt_loss
-                else:
-                    # 25000 -> 30000：衰减先验，让 RGB 光度损失接管细节
-                    alpha = (30000 - iteration) / 5000.0
-                    normal_loss = alpha * gt_loss + (1.0 - alpha) * self_supervised_loss
+            # [Stage 1] 参数化渐进式调度 (Ablation-friendly Schedule)
+            max_prior_alpha = float(max(0.0, min(1.0, opt.max_prior_alpha)))
+            if iteration < 5000:
+                # 1. 纯自监督阶段：保证几何初步成型
+                normal_loss = self_supervised_loss
+            elif iteration < 15000:
+                # 2. 线性混合增长：alpha 从 0 增长到 opt.max_prior_alpha
+                progress = (iteration - 5000) / 10000.0
+                current_alpha = progress * max_prior_alpha
+                normal_loss = (1.0 - current_alpha) * self_supervised_loss + current_alpha * gt_loss
+            elif iteration < 25000:
+                # 3. 稳定约束阶段：保持在设定的上限权重
+                normal_loss = (1.0 - max_prior_alpha) * self_supervised_loss + max_prior_alpha * gt_loss
+            else:
+                # 4. 衰减回归阶段：alpha 从上限退回 0，让光度损失做最后的平滑
+                progress = (30000 - iteration) / 5000.0
+                current_alpha = max(0.0, progress) * max_prior_alpha
+                normal_loss = (1.0 - current_alpha) * self_supervised_loss + current_alpha * gt_loss
 
             loss += normal_loss_weight * normal_loss
             
@@ -638,6 +639,13 @@ def training(
             tv_w1 = torch.pow(envmap[:, 1:, :] - envmap[:, :-1, :], 2).mean()
             env_tv_loss = tv_h1 + tv_w1
             loss += env_tv_loss * env_tv_weight
+
+        # [Stage 1] 扁平化正则项 (Scale Minimization / Flattening)
+        if opt.flatten_loss:
+            scales = gaussians.get_scaling  # [N, 3]
+            min_scale, _ = torch.min(scales, dim=1)
+            flatten_loss = min_scale.mean()
+            loss += opt.lambda_flatten * flatten_loss
 
         loss.backward()
 
