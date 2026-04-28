@@ -240,6 +240,12 @@ def readCamerasFromTransforms(
 
     fovx = contents["camera_angle_x"]
     frames = contents["frames"]
+    
+    # 提前引入库，避免在循环内重复引入
+    os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "1"
+    import imageio.v3 as iio
+    import torch.nn.functional as F
+
     for idx, frame in enumerate(frames):
         cam_name = os.path.join(path, frame["file_path"] + extension)
 
@@ -257,111 +263,133 @@ def readCamerasFromTransforms(
         image_name = Path(cam_name).stem
         image = Image.open(image_path)
 
-        # im_data = np.array(image.convert("RGBA"))
-
-        # bg = np.array([1, 1, 1]) if white_background else np.array([0, 0, 0])
-
-        # norm_data = im_data / 255.0
-        # arr = norm_data[:, :, :3] * norm_data[:, :, 3:4] + bg * (1 - norm_data[:, :, 3:4])
-        # image = Image.fromarray(np.array(arr * 255.0, dtype=np.byte), "RGB")
-
         fovy = focal2fov(fov2focal(fovx, image.size[0]), image.size[1])
         FovY = fovy
         FovX = fovx
 
-        os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "1"
-        import imageio.v3 as iio
-        import torch.nn.functional as F
+        # ==========================================================
+        # 🚀 1. 核心修复：绝对安全的路径初始化与匹配
+        # ==========================================================
+        # 强制初始化路径为 None，彻底杜绝 UnboundLocalError 报错
+        normal_path = None
+        conf_path = None
+        depth_path = None
         
         if use_da3_normal:
-            # === 核心修正：适配 Marigold 的独立文件夹结构 ===
-            # 在脚本中传入的 da3_normal_root 应该是 "marigold_final" 的路径
-            rel_path = os.path.relpath(image_path, path)
-            rel_dir = os.path.dirname(rel_path)
+            # TensoIR 数据集的 file_path 类似 "train/000/rgba"
+            # 原版的 Path(cam_name).stem 会错误地只截取 "rgba"
+            # 因此我们按 "/" 切割，重新组合出类似 "train_000_rgba" 的前缀
+            parts = frame["file_path"].replace('\\', '/').split('/')
+            
+            if len(parts) >= 2 and parts[-2].isdigit():
+                split_name = parts[-3] if len(parts) >= 3 else "train" # 提取 "train" 或 "test"
+                id_name = parts[-2] # 提取 "000"
+                real_prefix = f"{split_name}_{id_name}_rgba" # 组合为 "train_000_rgba"
+            else:
+                # 兼容异常情况的备用方案
+                real_prefix = f"train_{idx:03d}_rgba"
 
-            # 1. 拼接法线路径：marigold_final/normals_npy/train_000_rgba_normals.npy
-            normal_path = os.path.join(da3_normal_root, "normals_npy", f"{image_name}_rgba_normals.npy")
+            # 拼接最终路径，结果如：.../normals_npy/train_000_rgba_normals.npy
+            normal_path = os.path.join(da3_normal_root, "normals_npy", f"{real_prefix}_normals.npy")
+            conf_path = os.path.join(da3_normal_root, "conf_npy", f"{real_prefix}_conf.npy")
+            depth_path = os.path.join(da3_normal_root, "depth_npy", f"{real_prefix}_depth.npy")
 
-            # 2. 拼接置信度路径：marigold_final/conf_npy/train_000_rgba_conf.npy
-            conf_path = os.path.join(da3_normal_root, "conf_npy", f"{image_name}_rgba_conf.npy")
-
-            # 3. 深度路径（如果需要，假设存放在 depth_npy 下）
-            depth_path = os.path.join(da3_normal_root, "depth_npy", f"{image_name}_rgba_depth.npy")
-            # 如果没有专门的 depth_npy，保留原来的 fallback 逻辑
-            if not os.path.exists(depth_path):
-                 depth_path = os.path.join(da3_normal_root, rel_dir, "depth.npy")
+            if not os.path.exists(normal_path):
+                print(f"\033[91m⚠️ [严重错误] 找不到法线文件！试图寻找的路径为: {normal_path}\033[0m")
         else:
+            # === 极其重要的兜底逻辑（你上一版丢失的部分） ===
+            # 当不用 Marigold 时（比如加载测试集时 use_da3_normal=False）
+            # 我们需要给 normal_path 赋默认的 .exr 路径，否则后面找不到变量！
             view_dir = os.path.dirname(image_path)
             normal_path = os.path.join(view_dir, "normal.exr")
             conf_path = os.path.join(view_dir, "conf.exr")
             depth_path = os.path.join(view_dir, "depth.exr")
             
-        if os.path.exists(normal_path):
+        # ==========================================================
+        # 🚀 2. 健壮的法线读取与维度自适应
+        # ==========================================================
+        gt_normal = None
+        if normal_path and os.path.exists(normal_path):
             if normal_path.endswith(".exr"):
-                # imageio 读取 EXR 天然就是最纯正的 RGB 顺序和 FP32 精度，绝不乱转通道！
-                normal_data = iio.imread(normal_path)  # 形状为 [H, W, 3] 或 [H, W, 4]
+                normal_data = iio.imread(normal_path)
             elif normal_path.endswith(".npy"):
-                normal_data = np.load(normal_path, mmap_mode="r")
+                normal_data = np.load(normal_path) # 必须去掉 mmap_mode="r"，避免跨步报错
             else:
                 normal_data = None
                 
             if normal_data is not None:
-                # 防御性编程：如果是 RGBA (4通道)，只取前 3 个通道 (RGB)
-                if normal_data.shape[-1] == 4:
-                    normal_data = normal_data[:, :, :3]
-                gt_normal = torch.from_numpy(normal_data).permute(2, 0, 1).float() # 保证 [3, H, W]
-                # 确保法线归一化 (无论是否是 DA3，保持物理意义正确)
+                normal_data = np.array(normal_data, dtype=np.float32)
+                # 解决维度反转 Bug
+                if normal_data.ndim == 3 and normal_data.shape[0] == 3:
+                    # 如果原本就是 [3, H, W]，直接用
+                    gt_normal = torch.from_numpy(normal_data).float()
+                elif normal_data.ndim == 3 and normal_data.shape[-1] in [3, 4]:
+                    # 如果是 [H, W, 3] 或 [H, W, 4]
+                    if normal_data.shape[-1] == 4:
+                        normal_data = normal_data[:, :, :3]
+                    gt_normal = torch.from_numpy(normal_data).permute(2, 0, 1).float()
+                else:
+                    raise ValueError(f"无法识别的法线维度: {normal_data.shape}")
+                
                 gt_normal = F.normalize(gt_normal, p=2, dim=0, eps=1e-6)
-            else:
-                gt_normal = None
-        else:
-            gt_normal = None
-            
-        # 加载DA3置信度图
+
+        # ==========================================================
+        # 🚀 3. 健壮的置信度读取与维度自适应
+        # ==========================================================
         da3_normal_conf = None
-        if os.path.exists(conf_path):
+        if conf_path and os.path.exists(conf_path):
             if conf_path.endswith(".exr"):
                 conf_data = iio.imread(conf_path)
             elif conf_path.endswith(".npy"):
-                conf_data = np.load(conf_path, mmap_mode="r")
+                conf_data = np.load(conf_path)
             else:
                 conf_data = None
             
             if conf_data is not None:
-                if len(conf_data.shape) == 3:
-                    conf_data = conf_data[:, :, 0]  # 取单通道
-                da3_normal_conf = torch.from_numpy(conf_data).unsqueeze(0).float()  # [1, H, W]
-
-        # 加载DA3深度图
+                conf_data = np.array(conf_data, dtype=np.float32)
+                if conf_data.ndim == 2:
+                    da3_normal_conf = torch.from_numpy(conf_data).unsqueeze(0).float()
+                elif conf_data.ndim == 3 and conf_data.shape[0] == 1:
+                    da3_normal_conf = torch.from_numpy(conf_data).float()
+                elif conf_data.ndim == 3 and conf_data.shape[-1] == 1:
+                    da3_normal_conf = torch.from_numpy(conf_data).permute(2, 0, 1).float()
+                elif conf_data.ndim == 3 and conf_data.shape[-1] == 4:
+                    da3_normal_conf = torch.from_numpy(conf_data[:, :, 0]).unsqueeze(0).float()
+        
+        # ==========================================================
+        # 🚀 4. 健壮的深度图读取与维度自适应 
+        # ==========================================================
         da3_depth = None
-        if os.path.exists(depth_path):
+        if depth_path and os.path.exists(depth_path):
             if depth_path.endswith(".exr"):
                 depth_data = iio.imread(depth_path)
             elif depth_path.endswith(".npy"):
-                depth_data = np.load(depth_path, mmap_mode="r")
+                depth_data = np.load(depth_path) 
             else:
                 depth_data = None
                 
             if depth_data is not None:
-                if len(depth_data.shape) == 3:
-                    depth_data = depth_data[:, :, 0]  # 取单通道
-                da3_depth = torch.from_numpy(depth_data).unsqueeze(0).float()  # [1, H, W]
+                depth_data = np.array(depth_data, dtype=np.float32)
+                
+                # 自动识别并修复各种可能的维度组合
+                if depth_data.ndim == 2:
+                    da3_depth = torch.from_numpy(depth_data).unsqueeze(0).float()
+                elif depth_data.ndim == 3:
+                    if depth_data.shape[0] == 1:
+                        da3_depth = torch.from_numpy(depth_data).float()
+                    elif depth_data.shape[-1] == 1:
+                        da3_depth = torch.from_numpy(depth_data).permute(2, 0, 1).float()
+                    else:
+                        da3_depth = torch.from_numpy(depth_data[0:1, :, :]).float()
+            else:
+                print(f"\033[93m[警告] 深度文件读取失败: {depth_path}\033[0m")
 
         cam_infos.append(
             CameraInfo(
-                uid=idx,
-                R=R,
-                T=T,
-                FovY=FovY,
-                FovX=FovX,
-                image=image,
-                image_path=image_path,
-                image_name=image_name,
-                width=image.size[0],
-                height=image.size[1],
-                gt_normal=gt_normal,
-                da3_normal_conf=da3_normal_conf,
-                da3_depth=da3_depth,
+                uid=idx, R=R, T=T, FovY=FovY, FovX=FovX,
+                image=image, image_path=image_path, image_name=image_name,
+                width=image.size[0], height=image.size[1],
+                gt_normal=gt_normal, da3_normal_conf=da3_normal_conf, da3_depth=da3_depth
             )
         )
 

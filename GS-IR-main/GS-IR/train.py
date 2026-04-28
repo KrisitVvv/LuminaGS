@@ -285,6 +285,14 @@ def training(
         except:
             continue
 
+        # ======== 🚨 防空跑强制拦截器 (放在这里！) ========
+        if iteration == 1:
+            cam_attrs = [k for k in dir(viewpoint_cam) if not k.startswith('_')]
+            print(f"\n[DEBUG] 当前相机挂载的属性: {cam_attrs}")
+            if getattr(viewpoint_cam, "gt_normal", None) is None:
+                raise ValueError("💥 致命错误：gt_normal 为空！数据集没有成功读取 Marigold 法线！请检查上面的属性列表，看看是不是叫了别的名字！")
+        # ==================================================
+
         # Render
         if (iteration - 1) == debug_from:
             pipe.debug = True
@@ -333,68 +341,71 @@ def training(
         Ll1 = F.l1_loss(image, gt_image)
         normal_loss = 0.0
         
-        # === 插入的法线坐标系诊断测试代码 ===
-        if iteration == 10000:
-            if hasattr(viewpoint_cam, "gt_normal") and viewpoint_cam.gt_normal is not None:
-                orig_gt_normal_map = viewpoint_cam.gt_normal.cuda()
-                orig_gt_normal_map = F.normalize(orig_gt_normal_map, p=2, dim=0, eps=1e-6)
-                mask_diag = (viewpoint_cam.gt_alpha_mask.cuda() > 0.5).squeeze(0)
+        # # === 插入的法线坐标系诊断测试代码 ===
+        # 输出的是垃圾信息： 
+        # 拿来算误差的 orig_gt_normal_map 是纯相机的原始法线，并没有经过世界坐标系的旋转 (R_c2w)，也没有经过 Y/Z 的翻转对齐。
+        # 拿一个“还没做坐标系变换”的先验去和 3DGS 渲染的世界法线算余弦，算出来的值全是乱码。
+        # if iteration == 10000:
+        #     if hasattr(viewpoint_cam, "gt_normal") and viewpoint_cam.gt_normal is not None:
+        #         orig_gt_normal_map = viewpoint_cam.gt_normal.cuda()
+        #         orig_gt_normal_map = F.normalize(orig_gt_normal_map, p=2, dim=0, eps=1e-6)
+        #         mask_diag = (viewpoint_cam.gt_alpha_mask.cuda() > 0.5).squeeze(0)
                 
-                normal_map_norm_diag = F.normalize(normal_map, p=2, dim=0, eps=1e-6)
-                pred_normal_masked_diag = normal_map_norm_diag[:, mask_diag]
+        #         normal_map_norm_diag = F.normalize(normal_map, p=2, dim=0, eps=1e-6)
+        #         pred_normal_masked_diag = normal_map_norm_diag[:, mask_diag]
 
-                print(f"\n[DEBUG] --- Iteration {iteration} Normal Coordinate Diagnostics ---")
+        #         print(f"\n[DEBUG] --- Iteration {iteration} Normal Coordinate Diagnostics ---")
                 
-                # (A) 纯基准 (未翻转)
-                gt_pure = orig_gt_normal_map[:, mask_diag]
-                loss_pure = (1.0 - torch.clamp(torch.sum(pred_normal_masked_diag * gt_pure, dim=0), -1.0, 1.0)).mean().item()
-                print(f"[DEBUG] Baseline (No flip): {loss_pure:.4f}")
+        #         # (A) 纯基准 (未翻转)
+        #         gt_pure = orig_gt_normal_map[:, mask_diag]
+        #         loss_pure = (1.0 - torch.clamp(torch.sum(pred_normal_masked_diag * gt_pure, dim=0), -1.0, 1.0)).mean().item()
+        #         print(f"[DEBUG] Baseline (No flip): {loss_pure:.4f}")
                 
-                # (B) 翻转X轴
-                gt_x = orig_gt_normal_map.clone()
-                gt_x[0] = -gt_x[0]
-                loss_x = (1.0 - torch.clamp(torch.sum(pred_normal_masked_diag * gt_x[:, mask_diag], dim=0), -1.0, 1.0)).mean().item()
-                print(f"[DEBUG] Flip X axis:      {loss_x:.4f}")
+        #         # (B) 翻转X轴
+        #         gt_x = orig_gt_normal_map.clone()
+        #         gt_x[0] = -gt_x[0]
+        #         loss_x = (1.0 - torch.clamp(torch.sum(pred_normal_masked_diag * gt_x[:, mask_diag], dim=0), -1.0, 1.0)).mean().item()
+        #         print(f"[DEBUG] Flip X axis:      {loss_x:.4f}")
                 
-                # (C) 翻转Y轴
-                gt_y = orig_gt_normal_map.clone()
-                gt_y[1] = -gt_y[1]
-                loss_y = (1.0 - torch.clamp(torch.sum(pred_normal_masked_diag * gt_y[:, mask_diag], dim=0), -1.0, 1.0)).mean().item()
-                print(f"[DEBUG] Flip Y axis:      {loss_y:.4f}")
+        #         # (C) 翻转Y轴
+        #         gt_y = orig_gt_normal_map.clone()
+        #         gt_y[1] = -gt_y[1]
+        #         loss_y = (1.0 - torch.clamp(torch.sum(pred_normal_masked_diag * gt_y[:, mask_diag], dim=0), -1.0, 1.0)).mean().item()
+        #         print(f"[DEBUG] Flip Y axis:      {loss_y:.4f}")
                 
-                # (D) 翻转Z轴
-                gt_z = orig_gt_normal_map.clone()
-                gt_z[2] = -gt_z[2]
-                loss_z = (1.0 - torch.clamp(torch.sum(pred_normal_masked_diag * gt_z[:, mask_diag], dim=0), -1.0, 1.0)).mean().item()
-                print(f"[DEBUG] Flip Z axis:      {loss_z:.4f}")
+        #         # (D) 翻转Z轴
+        #         gt_z = orig_gt_normal_map.clone()
+        #         gt_z[2] = -gt_z[2]
+        #         loss_z = (1.0 - torch.clamp(torch.sum(pred_normal_masked_diag * gt_z[:, mask_diag], dim=0), -1.0, 1.0)).mean().item()
+        #         print(f"[DEBUG] Flip Z axis:      {loss_z:.4f}")
                 
-                # (E) 翻转X和Y轴
-                gt_xy = orig_gt_normal_map.clone()
-                gt_xy[0] = -gt_xy[0]
-                gt_xy[1] = -gt_xy[1]
-                loss_xy = (1.0 - torch.clamp(torch.sum(pred_normal_masked_diag * gt_xy[:, mask_diag], dim=0), -1.0, 1.0)).mean().item()
-                print(f"[DEBUG] Flip X and Y:     {loss_xy:.4f}")
+        #         # (E) 翻转X和Y轴
+        #         gt_xy = orig_gt_normal_map.clone()
+        #         gt_xy[0] = -gt_xy[0]
+        #         gt_xy[1] = -gt_xy[1]
+        #         loss_xy = (1.0 - torch.clamp(torch.sum(pred_normal_masked_diag * gt_xy[:, mask_diag], dim=0), -1.0, 1.0)).mean().item()
+        #         print(f"[DEBUG] Flip X and Y:     {loss_xy:.4f}")
 
-                # (F) 翻转X和Z轴
-                gt_xz = orig_gt_normal_map.clone()
-                gt_xz[0] = -gt_xz[0]
-                gt_xz[2] = -gt_xz[2]
-                loss_xz = (1.0 - torch.clamp(torch.sum(pred_normal_masked_diag * gt_xz[:, mask_diag], dim=0), -1.0, 1.0)).mean().item()
-                print(f"[DEBUG] Flip X and Z:     {loss_xz:.4f}")
+        #         # (F) 翻转X和Z轴
+        #         gt_xz = orig_gt_normal_map.clone()
+        #         gt_xz[0] = -gt_xz[0]
+        #         gt_xz[2] = -gt_xz[2]
+        #         loss_xz = (1.0 - torch.clamp(torch.sum(pred_normal_masked_diag * gt_xz[:, mask_diag], dim=0), -1.0, 1.0)).mean().item()
+        #         print(f"[DEBUG] Flip X and Z:     {loss_xz:.4f}")
                 
-                # (G) 翻转Y和Z轴
-                gt_yz = orig_gt_normal_map.clone()
-                gt_yz[1] = -gt_yz[1]
-                gt_yz[2] = -gt_yz[2]
-                loss_yz = (1.0 - torch.clamp(torch.sum(pred_normal_masked_diag * gt_yz[:, mask_diag], dim=0), -1.0, 1.0)).mean().item()
-                print(f"[DEBUG] Flip Y and Z:     {loss_yz:.4f}")
+        #         # (G) 翻转Y和Z轴
+        #         gt_yz = orig_gt_normal_map.clone()
+        #         gt_yz[1] = -gt_yz[1]
+        #         gt_yz[2] = -gt_yz[2]
+        #         loss_yz = (1.0 - torch.clamp(torch.sum(pred_normal_masked_diag * gt_yz[:, mask_diag], dim=0), -1.0, 1.0)).mean().item()
+        #         print(f"[DEBUG] Flip Y and Z:     {loss_yz:.4f}")
 
-                # (H) 全局取反
-                gt_inv = -orig_gt_normal_map.clone()
-                loss_inv = (1.0 - torch.clamp(torch.sum(pred_normal_masked_diag * gt_inv[:, mask_diag], dim=0), -1.0, 1.0)).mean().item()
-                print(f"[DEBUG] Invert all (-X,-Y,-Z): {loss_inv:.4f}")
+        #         # (H) 全局取反
+        #         gt_inv = -orig_gt_normal_map.clone()
+        #         loss_inv = (1.0 - torch.clamp(torch.sum(pred_normal_masked_diag * gt_inv[:, mask_diag], dim=0), -1.0, 1.0)).mean().item()
+        #         print(f"[DEBUG] Invert all (-X,-Y,-Z): {loss_inv:.4f}")
                 
-                print("[DEBUG] ---------------------------------------------------------\n")
+        #         print("[DEBUG] ---------------------------------------------------------\n")
                 
         if iteration <= pbr_iteration:
             loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
@@ -439,39 +450,104 @@ def training(
             self_supervised_loss = F.l1_loss(normal_map[:, final_mask], normal_map_from_depth[:, final_mask])
 
             if hasattr(viewpoint_cam, "gt_normal") and viewpoint_cam.gt_normal is not None:
-                marigold_normal = viewpoint_cam.gt_normal.cuda().clone()
-
-                # Marigold 是 +X, -Y, -Z 坐标系，翻转 Y 和 Z 对齐 GS-IR
-                marigold_normal[1, :, :] = -marigold_normal[1, :, :]
-                marigold_normal[2, :, :] = -marigold_normal[2, :, :]
-                marigold_normal = F.normalize(marigold_normal, p=2, dim=0, eps=1e-6)
-
+                
+                # 1. 拿到 Marigold 的相机空间法线 (它是 OpenGL 标准: +X右, +Y上, -Z前)
+                marigold_normal_cam = viewpoint_cam.gt_normal.cuda().clone()  # [3, H, W]
+                
+                # 2. 🚀【桥梁 1】：OpenGL 翻译为 OpenCV (你的脚本第一步)
+                # 只有把 Y 和 Z 翻转，它才能匹配 3DGS 后续的旋转矩阵
+                marigold_normal_cam[1, :, :] = -marigold_normal_cam[1, :, :] # Y_cam = -Y_pred
+                marigold_normal_cam[2, :, :] = -marigold_normal_cam[2, :, :] # Z_cam = -Z_pred
+                
+                # 3. 🚀【桥梁 2】：OpenCV 相机空间 -> 世界空间 (你的脚本第二步)
+                c2w_R = c2w[:3, :3]  # 获取 相机到世界 的 OpenCV 旋转矩阵 [3, 3]
+                
+                H_m, W_m = marigold_normal_cam.shape[1], marigold_normal_cam.shape[2]
+                marigold_normal_flat = marigold_normal_cam.view(3, -1)  # [3, H*W]
+                # 执行矩阵乘法：World_normal = R @ N_cam
+                marigold_normal_world = torch.matmul(c2w_R, marigold_normal_flat) 
+                
+                # 重塑并归一化。现在，它是一张完美对齐了 3DGS 物理世界的世界法线图！
+                marigold_normal = F.normalize(marigold_normal_world.view(3, H_m, W_m), p=2, dim=0, eps=1e-6)
                 normal_map_norm = F.normalize(normal_map, p=2, dim=0, eps=1e-6)
 
-                # 提取有效像素
-                pred_normal_masked = normal_map_norm[:, final_mask]  # [3, N]
-                gt_normal_masked = marigold_normal[:, final_mask]  # [3, N]
-                weight_masked = soft_weight[final_mask]  # [N]
+                # 🚀 必须加回来！它虽然不做裁判了，但它是 30% 噪点区域的“兜底抚养人”，也是雷达的平滑基准！
+                depth_normal_norm = F.normalize(normal_map_from_depth, p=2, dim=0, eps=1e-6)
 
-                # OOM 保护：可选随机像素采样，仅在有效像素过多时启用
-                if normal_loss_pixel_sampling and weight_masked.numel() > 0:
-                    sample_count = int(weight_masked.numel() * normal_loss_sample_ratio)
+                # ==========================================================
+                # 🛡️ 动态防噪盾 (Dynamic Outlier Rejection - 原生几何版)
+                # ==========================================================
+                with torch.no_grad():
+                    # ✅ 回归原生法线裁判：免疫深度边缘的“求导爆炸”，真实反映 3D 表面
+                    cos_sim_2d = torch.clamp(torch.sum(normal_map_norm * marigold_normal, dim=0), -1.0, 1.0)
+                    
+                    # 🎯 严谨数学推演：0.91 (容忍约 24° 偏差)
+                    # 24° 完美覆盖了 (原生法线底噪 7.3° + Marigold 有效高频细节 15°)
+                    angle_outlier_mask = cos_sim_2d < 0.96
+                
+                marigold_track_mask = final_mask & (~angle_outlier_mask)
+                # 只有被明确判定为噪点 (夹角 > 24°) 的像素，才会被打回深度平滑兜底
+                fallback_track_mask = mask & (~marigold_track_mask)
+                # ==========================================================
+                # 🚀 轨道 1：Marigold 先验指导
+                # ==========================================================
+                pred_normal_marigold = normal_map_norm[:, marigold_track_mask]
+                gt_normal_marigold = marigold_normal[:, marigold_track_mask]
+                weight_marigold = soft_weight[marigold_track_mask]
+
+                if normal_loss_pixel_sampling and weight_marigold.numel() > 0:
+                    sample_count = int(weight_marigold.numel() * normal_loss_sample_ratio)
                     sample_count = max(1, min(normal_loss_sample_cap, sample_count))
-                    if sample_count < weight_masked.numel():
-                        sample_idx = torch.randperm(weight_masked.numel(), device=weight_masked.device)[:sample_count]
-                        pred_normal_masked = pred_normal_masked[:, sample_idx]
-                        gt_normal_masked = gt_normal_masked[:, sample_idx]
-                        weight_masked = weight_masked[sample_idx]
+                    if sample_count < weight_marigold.numel():
+                        sample_idx = torch.randperm(weight_marigold.numel(), device=weight_marigold.device)[:sample_count]
+                        pred_normal_marigold = pred_normal_marigold[:, sample_idx]
+                        gt_normal_marigold = gt_normal_marigold[:, sample_idx]
+                        weight_marigold = weight_marigold[sample_idx]
 
-                # GaussianPro 风格 L1 + Cosine 双分量 Loss
-                l1_err = torch.abs(pred_normal_masked - gt_normal_masked).sum(dim=0)  # [N]
-                cos_err = 1.0 - torch.clamp(
-                    torch.sum(pred_normal_masked * gt_normal_masked, dim=0), -1.0, 1.0
-                )  # [N]
+                if weight_marigold.numel() > 0:
+                    l1_err = torch.abs(pred_normal_marigold - gt_normal_marigold).sum(dim=0)
+                    cos_err = 1.0 - torch.clamp(torch.sum(pred_normal_marigold * gt_normal_marigold, dim=0), -1.0, 1.0)
+                    lambda_l1, lambda_cos = 0.8, 0.2
+                    weight_sum = weight_marigold.sum() + 1e-6
+                    gt_loss_marigold = (weight_marigold * (lambda_l1 * l1_err + lambda_cos * cos_err)).sum() / weight_sum
+                else:
+                    gt_loss_marigold = 0.0
 
-                # L1 和 Cosine 权重
-                lambda_l1, lambda_cos = 0.8, 0.2
-                gt_loss = (weight_masked * (lambda_l1 * l1_err + lambda_cos * cos_err)).mean()
+                # ==========================================================
+                # 【数据收集区】：驱动播种机 (初心回归：解决 RGB 盲区)
+                # ==========================================================
+                with torch.no_grad():
+                    # 1. 取出当前实际长出来的 3D 几何法线
+                    raw_pred = normal_map_norm[:, mask]
+                    
+                    # 2. 合成我们的“信任目标法线”：防噪盾通过的用先验，没通过的用深度平滑
+                    target_normal = torch.where(
+                        marigold_track_mask[mask].unsqueeze(0),
+                        marigold_normal[:, mask],
+                        depth_normal_norm[:, mask]
+                    )
+                    
+                    # 3. 测算“现实与理想的几何差距”
+                    cos_theta_seed = torch.clamp(torch.sum(raw_pred * target_normal, dim=0), -1.0, 1.0)
+                    angle_err_seed = torch.acos(cos_theta_seed) * (180.0 / 3.1415926)
+                    
+                    current_seed_mask = torch.zeros((H, W), dtype=torch.bool, device="cuda")
+                    
+                    # 4. 无论 RGB 觉得这里多完美，只要几何偏离目标大于 15 度，就视为几何撕裂坏点！
+                    current_seed_mask[mask] = angle_err_seed > 15.0 
+                    
+                    c2w_matrix = torch.inverse(viewpoint_cam.world_view_transform.T)
+                    current_seed_points = -view_dirs * depth_map.permute(1, 2, 0) + c2w_matrix[:3, 3]
+
+                # ==========================================================
+                # 🚀 轨道 2：双轨制兜底
+                # ==========================================================
+                if fallback_track_mask.sum() > 0:
+                    loss_fallback = F.l1_loss(normal_map[:, fallback_track_mask], normal_map_from_depth[:, fallback_track_mask])
+                    gt_loss = gt_loss_marigold + 0.5 * loss_fallback
+                else:
+                    gt_loss = gt_loss_marigold
+
             else:
                 gt_loss = self_supervised_loss
 
@@ -485,14 +561,11 @@ def training(
                 progress = (iteration - 5000) / 10000.0
                 current_alpha = progress * max_prior_alpha
                 normal_loss = (1.0 - current_alpha) * self_supervised_loss + current_alpha * gt_loss
-            elif iteration < 25000:
-                # 3. 稳定约束阶段：保持在设定的上限权重
-                normal_loss = (1.0 - max_prior_alpha) * self_supervised_loss + max_prior_alpha * gt_loss
             else:
-                # 4. 衰减回归阶段：alpha 从上限退回 0，让光度损失做最后的平滑
-                progress = (30000 - iteration) / 5000.0
-                current_alpha = max(0.0, progress) * max_prior_alpha
-                normal_loss = (1.0 - current_alpha) * self_supervised_loss + current_alpha * gt_loss
+                # 3. 稳定约束阶段：保持在设定的上限权重，直到 30000 步！
+                # ！！！【修改点：删除了降为 0 的退火阶段】！！！
+                # 让 Marigold 一直压制 3DGS 的噪点，绝不妥协！
+                normal_loss = (1.0 - max_prior_alpha) * self_supervised_loss + max_prior_alpha * gt_loss
 
             loss += normal_loss_weight * normal_loss
             
@@ -660,6 +733,66 @@ def training(
             if iteration == opt.iterations:
                 progress_bar.close()
 
+# ==========================================================
+            # 【全局心电图：引擎健康度雷达 (每 100 步记录一次)】
+            # ==========================================================
+            if tb_writer and iteration % 100 == 0 and iteration <= pbr_iteration:
+                if hasattr(viewpoint_cam, "gt_normal") and viewpoint_cam.gt_normal is not None:
+                    with torch.no_grad():
+                        gs_n = normal_map_norm[:, mask]
+                        depth_n = depth_normal_norm[:, mask]
+                        mari_n = marigold_normal[:, mask]
+                        
+                        # 1. 计算核心指标 (平均夹角 MAE)
+                        angle_gs_depth = torch.acos(torch.clamp((gs_n * depth_n).sum(dim=0), -1.0, 1.0)) * 180 / 3.14159
+                        angle_gs_mari = torch.acos(torch.clamp((gs_n * mari_n).sum(dim=0), -1.0, 1.0)) * 180 / 3.14159
+                        
+                        # 2. 计算防噪盾拦截率 (以原生法线为裁判，>24度被抛弃的比例)
+                        cos_sim_diag = torch.clamp(torch.sum(gs_n * mari_n, dim=0), -1.0, 1.0)
+                        reject_rate = (cos_sim_diag < 0.91).float().mean() * 100.0
+
+                        # 3. 写入 TensorBoard
+                        tb_writer.add_scalar("Geometry_Health/MAE_GS_vs_Depth_Smoothness", angle_gs_depth.mean().item(), iteration)
+                        tb_writer.add_scalar("Geometry_Health/MAE_GS_vs_Marigold_Prior", angle_gs_mari.mean().item(), iteration)
+                        tb_writer.add_scalar("Geometry_Health/Shield_Reject_Rate_Percent", reject_rate.item(), iteration)
+                        
+                        # 4. (极力推荐) 可视化防噪盾的 Mask 工作状态 (每 500 步画一次图)
+                        if iteration % 500 == 0:
+                            # 绿色代表信任先验 (marigold_track)，红色代表打回兜底 (fallback_track)
+                            shield_vis = torch.zeros((3, H, W), device="cuda")
+                            shield_vis[1, marigold_track_mask] = 1.0 # Green
+                            shield_vis[0, fallback_track_mask] = 1.0 # Red
+                            
+                            tb_writer.add_images(
+                                "Diagnostics/Prior_Shield_Action_Mask",
+                                shield_vis[None],
+                                global_step=iteration,
+                                dataformats="NCHW"
+                            )
+
+            # ==========================================================
+            # 【探针 2：高频实时热力图抓拍 (每 500 步一次)】
+            # ==========================================================
+            if iteration % 500 == 0 and tb_writer and iteration <= pbr_iteration:
+                if hasattr(viewpoint_cam, "gt_normal") and viewpoint_cam.gt_normal is not None:
+                    # 获取当前视角的预测法线和 GT 法线
+                    pred_n_cpu = normal_map.cpu()
+                    gt_n_cpu = marigold_normal.cpu() # 记得这里用我们修正过坐标系的 marigold_normal
+                    mask_cpu = mask.squeeze(0).cpu() # 获取当前深度有效区域掩码
+                    
+                    # 动态计算角度误差热力图
+                    rt_angle_err_np = normal_angle_error_map(pred_n_cpu, gt_n_cpu, mask_cpu)
+                    
+                    # 发送到 TensorBoard (除以 30.0 是为了归一化显示，原版设定)
+                    rt_angle_error_tensor = torch.from_numpy(rt_angle_err_np)[None, ...] / 30.0
+                    tb_writer.add_images(
+                        "realtime_validation/training_view_angle_error",
+                        rt_angle_error_tensor[None],  # [1, 1, H, W]
+                        global_step=iteration,
+                        dataformats="NCHW"
+                    )
+            # ==========================================================
+
             # Log and save
             training_report(
                 tb_writer=tb_writer,
@@ -703,6 +836,33 @@ def training(
                     gaussians.densify_and_prune(
                         opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold
                     )
+                    
+                    # ==========================================================
+                    # 【修复 2】安全执行区：此时梯度已更新完毕，播种不会打断计算图
+                    # ==========================================================
+                    if (iteration > opt.normal_error_densify_iter_start and 
+                        iteration < opt.normal_error_densify_iter_end):
+                        
+                        if 'current_seed_mask' in locals() and 'current_seed_points' in locals():
+                            # 统计发现了多少个高误差坏点
+                            high_error_count = current_seed_mask.sum().item()
+                            
+                            if high_error_count > 0:
+                                # 执行播种
+                                # gaussians.densify_from_normal_error_stochastic(
+                                #     error_mask=current_seed_mask,
+                                #     points_3d=current_seed_points,
+                                #     seed_count=opt.normal_error_seed_count
+                                # )
+                                
+                                # 【探针 1：控制台与 TensorBoard 实时监控】
+                                actual_seeds = min(high_error_count, opt.normal_error_seed_count)
+                                print(f"\n[实时验证] Iter {iteration} | 发现高误差坏点: {high_error_count} | 实际播种: {actual_seeds} | 当前总点数: {gaussians.get_xyz.shape[0]}")
+                                
+                                if tb_writer:
+                                    tb_writer.add_scalar("seed_generator/high_error_pixels_found", high_error_count, iteration)
+                                    tb_writer.add_scalar("seed_generator/actual_seeds_planted", actual_seeds, iteration)
+                    # ==========================================================
 
                 if iteration % opt.opacity_reset_interval == 0 or (
                     dataset.white_background and iteration == opt.densify_from_iter
@@ -976,38 +1136,43 @@ def training_report(
                                 resize_tensorboard_img(gt_image)[None],
                                 global_step=iteration,
                             )
-                    # 法线角度误差可视化：保存图片不依赖 TensorBoard writer
+                    # 法线角度误差可视化：区分 Train 和 Test 的对比对象；保存图片不依赖 TensorBoard writer
                     if (
                         idx < 5
                         and iteration <= pbr_iteration
-                        and hasattr(viewpoint, "gt_normal")
-                        and viewpoint.gt_normal is not None
                     ):
-                        # 1. 获取数据
                         pred_normal = render_result["normal_map"].cpu()
-                        gt_normal = viewpoint.gt_normal.cpu()
                         mask = (viewpoint.gt_alpha_mask > 0.5).squeeze(0).cpu()
+                        
+                        if config['name'] == 'test' and hasattr(viewpoint, "gt_normal") and viewpoint.gt_normal is not None:
+                            # Test 视角：有绝对的真值，画 真实误差热力图
+                            target_normal = viewpoint.gt_normal.cpu()
+                            tag_name = "normal_angle_error_vs_RealGT"
+                        else:
+                            # Train 视角：没有绝对真值（只有Marigold），转而画 内部平滑度热力图（GS vs Depth伪法线）
+                            target_normal = render_result["normal_map_from_depth"].cpu()
+                            tag_name = "normal_angle_error_vs_DepthSmoothness"
 
-                        # 2. 计算角度误差
-                        angle_error_np = normal_angle_error_map(pred_normal, gt_normal, mask)
+                        # 计算角度误差
+                        angle_error_np = normal_angle_error_map(pred_normal, target_normal, mask)
 
-                        # 3. 若可用则写 TensorBoard
+                        # 若可用则写 TensorBoard
                         if tb_writer:
                             angle_error_tensor = torch.from_numpy(angle_error_np)[None, ...]  # [1, H, W]
                             angle_error_tensor = angle_error_tensor / 30.0
                             tb_writer.add_images(
-                                f"{config['name']}_view_{viewpoint.image_name}_{idx}/normal_angle_error",
+                                f"{config['name']}_view_{viewpoint.image_name}_{idx}/{tag_name}",
                                 angle_error_tensor[None],  # [1, 1, H, W]
                                 global_step=iteration,
                                 dataformats="NCHW"
                             )
 
-                        # 4. 始终保存到输出目录
+                        # 始终保存到输出目录
                         os.makedirs(os.path.join(scene.model_path, "angle_error_vis"), exist_ok=True)
                         save_path = os.path.join(
                             scene.model_path,
                             "angle_error_vis",
-                            f"{config['name']}_view_{viewpoint.image_name}_iter{iteration}.png"
+                            f"{config['name']}_view_{viewpoint.image_name}_iter{iteration}_{tag_name}.png"
                         )
                         save_angle_error_heatmap(angle_error_np, save_path)
                     if iteration > pbr_iteration:

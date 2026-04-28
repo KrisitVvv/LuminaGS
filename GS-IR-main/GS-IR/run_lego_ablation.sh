@@ -14,7 +14,7 @@ HDRI_DIR="datasets/TensoIR/env_maps/high_res_envmaps_2k"
 N_TV=0.3
 NL_W=0.12
 BT_W=0.5
-C_TH=0.9
+C_TH=0.5
 
 # ==========================================================
 # 🧪 定义消融组: 加入了 0.8 和 0.3 的细粒度消融
@@ -22,10 +22,18 @@ C_TH=0.9
 # ==========================================================
 EXP_GROUPS=(
     # "GroupA_alpha1.0|1.0|False"  # 👈 GroupA 你已经跑完并评估完毕了，保持注释
-    "GroupB_alpha0.8|0.8|False"
-    "GroupC_alpha0.5|0.5|False"
-    "GroupD_alpha0.3|0.3|False"
-    "GroupE_alpha0.5_flatten|0.5|True" # 👈 完全体方案
+    # "GroupB_alpha0.8|0.8|False"
+    # "GroupC_alpha0.5|0.5|False"
+    # "GroupD_alpha0.3|0.3|False"
+    # "GroupE_alpha0.5_flatten|0.5|True" # 👈 完全体方案
+    # "GroupF_alpha1.0_flatten|1.0|True"
+    # "Group1_alpha0.5|0.5|False"
+    # "Group6_alpha0.5_cos0.96|0.5|False"
+    # "Group7_alpha0.5_cos0.96_flatten|0.5|True"
+    # "Group9_alpha0.5_cos_0.96|0.5|False"
+    # "Group10_alpha0.5_cos0.91|0.5|False"
+    # "Group11_alpha0.5_cos0.96|0.5|False"
+    "Group12_alpha0.5_cos0.96|0.5|False"
 )
 
 # ==========================================================

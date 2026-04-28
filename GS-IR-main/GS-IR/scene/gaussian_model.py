@@ -739,3 +739,41 @@ class GaussianModel:
             viewspace_point_tensor.grad[update_filter, :2], dim=-1, keepdim=True
         )
         self.denom[update_filter] += 1
+    
+    def densify_from_normal_error_stochastic(self, error_mask, points_3d, seed_count=8000):
+        """
+        基于精确 3D 坐标的播种机
+        error_mask: 2D 布尔掩码 [H, W]
+        points_3d: 预计算好的真实 3D 世界坐标矩阵 [H, W, 3]
+        """
+        nonzero_indices = torch.nonzero(error_mask) # [N, 2] (y, x)
+        if nonzero_indices.shape[0] == 0:
+            return
+
+        # 随机采样
+        sample_indices = torch.randint(0, nonzero_indices.shape[0], (min(seed_count, nonzero_indices.shape[0]),))
+        sampled_pixels = nonzero_indices[sample_indices]
+
+        # [修复 3] 直接提取精确的 3D 世界坐标，不再计算逆投影
+        new_xyz = points_3d[sampled_pixels[:, 0], sampled_pixels[:, 1]] # [num_new, 3]
+        num_new = new_xyz.shape[0]
+        
+        # 初始化属性
+        new_scaling = self.scaling_inverse_activation(torch.ones((num_new, 3), device="cuda") * 0.001)
+        new_rotation = torch.zeros((num_new, 4), device="cuda")
+        new_rotation[:, 0] = 1 
+        new_features_dc = torch.zeros((num_new, 1, 3), device="cuda")
+        new_features_rest = torch.zeros((num_new, 15, 3), device="cuda")
+        new_opacities = self.inverse_opacity_activation(torch.ones((num_new, 1), device="cuda") * 0.1)
+        
+        new_normal = torch.zeros((num_new, 3), device="cuda")
+        new_normal[:, 2] = 1.0 
+        new_albedo = torch.ones((num_new, 3), device="cuda") * 0.5
+        new_roughness = torch.ones((num_new, 1), device="cuda") * 0.5
+        new_metallic = torch.zeros((num_new, 1), device="cuda")
+        
+        self.densification_postfix(
+            new_xyz, new_features_dc, new_features_rest, new_opacities,
+            new_normal, new_albedo, new_roughness, new_metallic,
+            new_scaling, new_rotation
+        )
