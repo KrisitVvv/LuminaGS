@@ -18,10 +18,11 @@ C_TH=0.5
 
 # ==========================================================
 # 🧪 定义消融组: 加入了 0.8 和 0.3 的细粒度消融
-# 格式: "组名|max_prior_alpha|是否开启flatten"
+# 格式: "组名|max_prior_alpha|是否开启flatten|cos_thresh阈值"
+# 如果不写第4个参数(cos_thresh)，会默认使用0.96
 # ==========================================================
 EXP_GROUPS=(
-    # "GroupA_alpha1.0|1.0|False"  # 👈 GroupA 你已经跑完并评估完毕了，保持注释
+    # "GroupA_alpha1.0|1.0|False|0.96"  # 👈 GroupA 你已经跑完并评估完毕了，保持注释
     # "GroupB_alpha0.8|0.8|False"
     # "GroupC_alpha0.5|0.5|False"
     # "GroupD_alpha0.3|0.3|False"
@@ -31,9 +32,10 @@ EXP_GROUPS=(
     # "Group6_alpha0.5_cos0.96|0.5|False"
     # "Group7_alpha0.5_cos0.96_flatten|0.5|True"
     # "Group9_alpha0.5_cos_0.96|0.5|False"
-    # "Group10_alpha0.5_cos0.91|0.5|False"
+    # "Group10_alpha0.5_cos0.91|0.5|False|0.91"
     # "Group11_alpha0.5_cos0.96|0.5|False"
-    "Group12_alpha0.5_cos0.96|0.5|False"
+    # "Group13_alpha0.5_cos0.96_loss|0.5|False|0.96"
+    "Group14_alpha0.5_cos0.91_loss|0.5|False|0.91"
 )
 
 # ==========================================================
@@ -45,7 +47,12 @@ EVAL_HDRIS=("bridge" "city" "fireplace" "forest" "night" "sunset")
 
 for group_info in "${EXP_GROUPS[@]}"; do
     # 解析参数
-    IFS='|' read -r G_NAME ALPHA USE_FLATTEN <<< "$group_info"
+    IFS='|' read -r G_NAME ALPHA USE_FLATTEN COS_THRESH <<< "$group_info"
+    
+    # 默认值兜底
+    if [ -z "$COS_THRESH" ]; then
+        COS_THRESH="0.96"
+    fi
     
     # 动态设定输出目录和扁平化参数
     OUTPUT_PATH="outputs/lego_${G_NAME}"
@@ -56,7 +63,7 @@ for group_info in "${EXP_GROUPS[@]}"; do
     
     echo "=========================================================================="
     echo "🚀 开始实验组: $G_NAME"
-    echo "配置: --max_prior_alpha $ALPHA | Flatten: $USE_FLATTEN"
+    echo "配置: --max_prior_alpha $ALPHA | Flatten: $USE_FLATTEN | Cos Thresh: $COS_THRESH"
     echo "=========================================================================="
 
     # 1. 基础重建阶段 (Vanilla 30k)
@@ -70,6 +77,7 @@ for group_info in "${EXP_GROUPS[@]}"; do
         --brdf_tv ${BT_W} \
         --conf_thresh ${C_TH} \
         --max_prior_alpha ${ALPHA} \
+        --cos_thresh ${COS_THRESH} \
         ${FLATTEN_FLAG} \
         --eval
 
@@ -91,6 +99,7 @@ for group_info in "${EXP_GROUPS[@]}"; do
         --brdf_tv ${BT_W} \
         --conf_thresh ${C_TH} \
         --max_prior_alpha ${ALPHA} \
+        --cos_thresh ${COS_THRESH} \
         ${FLATTEN_FLAG} \
         --eval --gamma --indirect
 

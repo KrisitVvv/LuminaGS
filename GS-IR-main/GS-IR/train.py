@@ -481,102 +481,99 @@ def training(
                     # ✅ 回归原生法线裁判：免疫深度边缘的“求导爆炸”，真实反映 3D 表面
                     cos_sim_2d = torch.clamp(torch.sum(normal_map_norm * marigold_normal, dim=0), -1.0, 1.0)
                     
-                    # 🎯 严谨数学推演：0.91 (容忍约 24° 偏差)
-                    # 24° 完美覆盖了 (原生法线底噪 7.3° + Marigold 有效高频细节 15°)
-                    angle_outlier_mask = cos_sim_2d < 0.96
+                    # 🎯 严谨数学推演：容忍约一定角度偏差
+                    current_cos_thresh = opt.cos_thresh
+                    angle_outlier_mask = cos_sim_2d < current_cos_thresh
                 
                 marigold_track_mask = final_mask & (~angle_outlier_mask)
-                # 只有被明确判定为噪点 (夹角 > 24°) 的像素，才会被打回深度平滑兜底
-                fallback_track_mask = mask & (~marigold_track_mask)
-                # ==========================================================
-                # 🚀 轨道 1：Marigold 先验指导
-                # ==========================================================
-                pred_normal_marigold = normal_map_norm[:, marigold_track_mask]
-                gt_normal_marigold = marigold_normal[:, marigold_track_mask]
-                weight_marigold = soft_weight[marigold_track_mask]
-
-                if normal_loss_pixel_sampling and weight_marigold.numel() > 0:
-                    sample_count = int(weight_marigold.numel() * normal_loss_sample_ratio)
-                    sample_count = max(1, min(normal_loss_sample_cap, sample_count))
-                    if sample_count < weight_marigold.numel():
-                        sample_idx = torch.randperm(weight_marigold.numel(), device=weight_marigold.device)[:sample_count]
-                        pred_normal_marigold = pred_normal_marigold[:, sample_idx]
-                        gt_normal_marigold = gt_normal_marigold[:, sample_idx]
-                        weight_marigold = weight_marigold[sample_idx]
-
-                if weight_marigold.numel() > 0:
-                    l1_err = torch.abs(pred_normal_marigold - gt_normal_marigold).sum(dim=0)
-                    cos_err = 1.0 - torch.clamp(torch.sum(pred_normal_marigold * gt_normal_marigold, dim=0), -1.0, 1.0)
-                    lambda_l1, lambda_cos = 0.8, 0.2
-                    weight_sum = weight_marigold.sum() + 1e-6
-                    gt_loss_marigold = (weight_marigold * (lambda_l1 * l1_err + lambda_cos * cos_err)).sum() / weight_sum
-                else:
-                    gt_loss_marigold = 0.0
+                # 严格互斥划分，确保不重不漏
+                fallback_track_mask = final_mask & (~marigold_track_mask)
 
                 # ==========================================================
-                # 【数据收集区】：驱动播种机 (初心回归：解决 RGB 盲区)
+                # 🚀 目标一：GaussianPro 风格的 L1+Cosine 混合损失 (统一分母防爆炸)
+                # ==========================================================
+                total_valid_pixels = final_mask.sum().float() + 1e-6
+                
+                # --- 轨道 1：Marigold 先验区 ---
+                sum_mari_loss = 0.0
+                if marigold_track_mask.sum() > 0:
+                    pred_n_mari = normal_map_norm[:, marigold_track_mask]
+                    gt_n_mari = marigold_normal[:, marigold_track_mask]
+                    w_mari = soft_weight[marigold_track_mask]
+                    
+                    # 跨通道求均值 [N]，保留像素维度
+                    l1_mari = torch.abs(pred_n_mari - gt_n_mari).mean(dim=0)
+                    cos_mari = 1.0 - torch.clamp(torch.sum(pred_n_mari * gt_n_mari, dim=0), -1.0, 1.0)
+                    
+                    # 混合双打并求总和 (不再局部求 mean)
+                    sum_mari_loss = (w_mari * (0.8 * l1_mari + 0.2 * cos_mari)).sum()
+
+                # --- 轨道 2：深度平滑兜底区 ---
+                sum_fall_loss = 0.0
+                if fallback_track_mask.sum() > 0:
+                    pred_n_fall = normal_map_norm[:, fallback_track_mask]
+                    depth_n_fall = depth_normal_norm[:, fallback_track_mask]
+                    
+                    # 跨通道求均值 [N]
+                    l1_fall = torch.abs(pred_n_fall - depth_n_fall).mean(dim=0)
+                    
+                    # 纯 L1 求总和 (不再局部求 mean)
+                    sum_fall_loss = l1_fall.sum()
+
+                # 统一除以总有效像素，保证全图每个像素的梯度尺度完全绝对一致！
+                gt_loss = (sum_mari_loss + sum_fall_loss) / total_valid_pixels
+
+                # ==========================================================
+                # 【数据收集区】：驱动播种机 (曲率雷达保持不变)
                 # ==========================================================
                 with torch.no_grad():
-                    # 1. 取出当前实际长出来的 3D 几何法线
                     raw_pred = normal_map_norm[:, mask]
-                    
-                    # 2. 合成我们的“信任目标法线”：防噪盾通过的用先验，没通过的用深度平滑
                     target_normal = torch.where(
                         marigold_track_mask[mask].unsqueeze(0),
                         marigold_normal[:, mask],
                         depth_normal_norm[:, mask]
                     )
-                    
-                    # 3. 测算“现实与理想的几何差距”
                     cos_theta_seed = torch.clamp(torch.sum(raw_pred * target_normal, dim=0), -1.0, 1.0)
                     angle_err_seed = torch.acos(cos_theta_seed) * (180.0 / 3.1415926)
                     
+                    mari_diff_h = torch.abs(marigold_normal[:, 1:, :] - marigold_normal[:, :-1, :]).sum(dim=0)
+                    mari_diff_w = torch.abs(marigold_normal[:, :, 1:] - marigold_normal[:, :, :-1]).sum(dim=0)
+                    curvature_map = torch.zeros((H, W), device="cuda")
+                    curvature_map[:-1, :] += mari_diff_h
+                    curvature_map[:, :-1] += mari_diff_w
+                    curve_seed = curvature_map[mask]
+
                     current_seed_mask = torch.zeros((H, W), dtype=torch.bool, device="cuda")
-                    
-                    # 4. 无论 RGB 觉得这里多完美，只要几何偏离目标大于 15 度，就视为几何撕裂坏点！
-                    current_seed_mask[mask] = angle_err_seed > 15.0 
+                    current_seed_mask[mask] = (angle_err_seed > 15.0) & (curve_seed > 0.15)
                     
                     c2w_matrix = torch.inverse(viewpoint_cam.world_view_transform.T)
                     current_seed_points = -view_dirs * depth_map.permute(1, 2, 0) + c2w_matrix[:3, 3]
 
-                # ==========================================================
-                # 🚀 轨道 2：双轨制兜底
-                # ==========================================================
-                if fallback_track_mask.sum() > 0:
-                    loss_fallback = F.l1_loss(normal_map[:, fallback_track_mask], normal_map_from_depth[:, fallback_track_mask])
-                    gt_loss = gt_loss_marigold + 0.5 * loss_fallback
-                else:
-                    gt_loss = gt_loss_marigold
-
             else:
                 gt_loss = self_supervised_loss
 
-            # [Stage 1] 参数化渐进式调度 (Ablation-friendly Schedule)
-            max_prior_alpha = float(max(0.0, min(1.0, opt.max_prior_alpha)))
-            if iteration < 5000:
-                # 1. 纯自监督阶段：保证几何初步成型
+            # ==========================================================
+            # 🚀 目标二：2DGS 风格的阶跃调度 (Step Scheduling)
+            # ==========================================================
+            if iteration <= 7000:
+                # 前 7000 步：让 3DGS 充分繁衍，仅用自监督打磨出大体平滑的宏观表面
                 normal_loss = self_supervised_loss
-            elif iteration < 15000:
-                # 2. 线性混合增长：alpha 从 0 增长到 opt.max_prior_alpha
-                progress = (iteration - 5000) / 10000.0
-                current_alpha = progress * max_prior_alpha
-                normal_loss = (1.0 - current_alpha) * self_supervised_loss + current_alpha * gt_loss
             else:
-                # 3. 稳定约束阶段：保持在设定的上限权重，直到 30000 步！
-                # ！！！【修改点：删除了降为 0 的退火阶段】！！！
-                # 让 Marigold 一直压制 3DGS 的噪点，绝不妥协！
-                normal_loss = (1.0 - max_prior_alpha) * self_supervised_loss + max_prior_alpha * gt_loss
-
-            loss += normal_loss_weight * normal_loss
+                # 7000 步后：基本拓扑成型，猛加 GaussianPro 混合先验损失，雕刻细节！
+                normal_loss = gt_loss
+            
+            # 🚨 必须把 Normal Loss 加进计算图
+            # 在 training 函数签名里，normal_loss_weight 已经被作为局部变量（函数参数）直接传进来了，删去opt、修正为直接使用局部变量
+            loss += normal_loss * normal_loss_weight       # ✅ 正确：直接使用传进来的参数
             
             # 采用全新的完美自适应 TV 损失（平滑与细节保留并存）
             normal_tv_loss = get_perfect_adaptive_tv_loss(
                 gt_image, 
                 normal_map, 
-                base_tv_weight=1.0,  # 保持1.0，因为--normal_tv已经是0.3
-                detail_min_weight=0.02,  # 从0.05降到0.02，进一步保留微小凸点
+                base_tv_weight=1.0,
+                detail_min_weight=0.02,
                 flat_max_weight=1.0,
-                detail_threshold=0.015,  # 从0.02降到0.015，更多区域被识别为细节
+                detail_threshold=0.015,
                 transition_smoothness=0.005
             )
             loss += normal_tv_loss * normal_tv_weight
@@ -747,9 +744,10 @@ def training(
                         angle_gs_depth = torch.acos(torch.clamp((gs_n * depth_n).sum(dim=0), -1.0, 1.0)) * 180 / 3.14159
                         angle_gs_mari = torch.acos(torch.clamp((gs_n * mari_n).sum(dim=0), -1.0, 1.0)) * 180 / 3.14159
                         
-                        # 2. 计算防噪盾拦截率 (以原生法线为裁判，>24度被抛弃的比例)
+                        # 2. 计算防噪盾拦截率 (以原生法线为裁判，大于约一定角度被抛弃的比例)
                         cos_sim_diag = torch.clamp(torch.sum(gs_n * mari_n, dim=0), -1.0, 1.0)
-                        reject_rate = (cos_sim_diag < 0.91).float().mean() * 100.0
+                        current_cos_thresh = opt.cos_thresh
+                        reject_rate = (cos_sim_diag < current_cos_thresh).float().mean() * 100.0
 
                         # 3. 写入 TensorBoard
                         tb_writer.add_scalar("Geometry_Health/MAE_GS_vs_Depth_Smoothness", angle_gs_depth.mean().item(), iteration)

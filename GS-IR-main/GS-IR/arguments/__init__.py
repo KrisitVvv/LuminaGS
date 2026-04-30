@@ -99,6 +99,7 @@ class OptimizationParams(ParamGroup):
         self.max_prior_alpha = 0.5
         self.flatten_loss = False
         self.lambda_flatten = 0.001
+        self.cos_thresh = 0.96
         # --- 新增的“种子生成器”控制参数 ---
         self.normal_error_densify_iter_start = 7000  # 开始播种的迭代步数
         self.normal_error_densify_iter_end = 15000    # 停止播种的迭代步数
