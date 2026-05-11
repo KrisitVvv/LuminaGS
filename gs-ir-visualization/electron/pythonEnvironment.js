@@ -10,11 +10,10 @@ class PythonEnvironmentManager {
     this.envName = 'gsir';
     this.envPath = null;
     this.isInitialized = false;
-    this.installationProcess = null; // 当前安装进程
+    this.installationProcess = null;
     this.cleanupInProgress = false;
   }
 
-  // 检测系统 Python 和 Conda
   async detectPythonAndConda() {
     console.log('[DEBUG] 开始检测 Python 和 Conda...');
         
@@ -24,7 +23,6 @@ class PythonEnvironmentManager {
       availableEnvs: []
     };
     
-    // 检测 Conda
     try {
       console.log('[DEBUG] 开始检测 Conda...');
       const condaPath = await this.findExecutable('conda');
@@ -34,32 +32,32 @@ class PythonEnvironmentManager {
         results.conda = condaPath;
         this.condaPath = condaPath;
             
-        // 获取所有 conda 环境
+        // Get all conda environments
         console.log('[DEBUG] 开始获取 conda 环境列表...');
         const envs = await this.getCondaEnvironments();
         console.log('[DEBUG] 获取到的环境列表:', envs);
             
-        // 检查是否有 gsir 环境
+        // Check for gsir environment
         const gsirEnv = envs.find(env => env.includes('gsir') || env.endsWith('envs\\gsir'));
         console.log('[DEBUG] 查找 gsir 环境:', gsirEnv);
             
         if (gsirEnv) {
           console.log('[DEBUG] 找到 gsir 环境:', gsirEnv);
-          // 验证环境是否有效
+          // Validate environment existence
           const isValid = await this.checkEnvironmentExists(gsirEnv);
           console.log('[DEBUG] gsir 环境有效性:', isValid);
               
           if (isValid) {
-            // 验证环境依赖
+            // Validate environment dependencies
             const validation = await this.validateEnvironment();
             console.log('[DEBUG] 环境依赖验证结果:', validation);
                 
             if (validation.valid) {
-              console.log('[DEBUG] ✓ 找到有效的 gsir 环境');
+              console.log('[DEBUG] 找到有效的 gsir 环境');
               this.isInitialized = true;
               this.envPath = gsirEnv;
               results.availableEnvs = [gsirEnv];
-              return results; // 已有有效环境，直接返回
+              return results; 
             }
           }
         }
@@ -72,7 +70,6 @@ class PythonEnvironmentManager {
       console.error('[DEBUG] 检测 Conda 失败:', error);
     }
     
-    // 检测系统 Python
     try {
       console.log('[DEBUG] 开始检测 Python...');
       const pythonPath = await this.findExecutable('python');
@@ -105,7 +102,7 @@ class PythonEnvironmentManager {
     return null;
   }
 
-  // 获取 Conda 环境列表
+  // Get Conda environment list
   async getCondaEnvironments() {
     if (!this.condaPath) return [];
 
@@ -150,7 +147,7 @@ class PythonEnvironmentManager {
     });
   }
 
-  // 检查指定环境是否存在
+  // Check if the specified environment exists
   async checkEnvironmentExists(envPath) {
     console.log(`[DEBUG] 检查环境是否存在：${envPath}`);
     try {
@@ -163,7 +160,7 @@ class PythonEnvironmentManager {
       await fs.access(pythonExe);
       console.log(`[DEBUG] 环境存在：${envPath}`);
       this.envPath = envPath;
-      this.pythonPath = pythonExe;  // 确保设置 pythonPath
+      this.pythonPath = pythonExe; 
       console.log(`[DEBUG] 已设置 pythonPath: ${this.pythonPath}`);
       return true;
     } catch (error) {
@@ -172,7 +169,6 @@ class PythonEnvironmentManager {
     }
   }
 
-  // 创建 Conda 环境
   async createEnvironment(ymlPath, envName = 'gsir') {
     if (!this.condaPath) {
       throw new Error('未找到 Conda');
@@ -194,7 +190,7 @@ class PythonEnvironmentManager {
 
       console.log('创建 Conda 环境:', this.condaPath, args.join(' '));
 
-      // 发送开始安装的消息
+      // Send start installation message
       if (global.mainWindow) {
         global.mainWindow.webContents.send('environment-progress', {
           type: 'info',
@@ -210,7 +206,6 @@ class PythonEnvironmentManager {
             env: { ...process.env, PYTHONUTF8: '1' }
           });
 
-      // 保存当前安装进程引用
       this.installationProcess = child;
 
       let output = '';
@@ -220,31 +215,25 @@ class PythonEnvironmentManager {
       child.stdout.on('data', (data) => {
         const msg = data.toString();
         output += msg;
-              
-        // 实时解析输出，提取进度信息
         if (global.mainWindow) {
-          // 先移除所有的退格符组合（\b\b\ 等）
           const cleanedMsg = msg.replace(/\x08+/g, '');
-                
-          // 过滤加载动画字符（\ | / - 以及带退格符的版本）
           const loadingAnimationPatterns = [
-            /^\s*[\\|\/-]\s*$/,      // 单独的加载字符
-            /^\s*[\\|\/-]\s+\d+%/ ,  // 加载字符 + 百分比
-            /^\s*\.\.\.*\s*$/,       // 省略号
-            /^[\x08\s]+$/,           // 纯退格符和空白
+            /^\s*[\\|\/-]\s*$/,  
+            /^\s*[\\|\/-]\s+\d+%/ , 
+            /^\s*\.\.\.*\s*$/,
+            /^[\x08\s]+$/,
           ];
                 
           const isAnimation = loadingAnimationPatterns.some(pattern => pattern.test(cleanedMsg.trim()));
                 
           if (!isAnimation) {
-            // 发送清理后的输出（过滤动画和退格符）
             global.mainWindow.webContents.send('environment-progress', {
               type: 'stdout',
               data: cleanedMsg
             });
           }
           
-          // 解析进度百分比并发送 info 消息
+          // Parse progress percentage and send info message
           const progressPatterns = [
             /\[(\d+)%\]/,
             /Progress:\s*(\d+)%/i,
@@ -264,7 +253,6 @@ class PythonEnvironmentManager {
             }
           }
           
-          // 检测关键阶段并发送提示
           if (msg.includes('Solving environment')) {
             global.mainWindow.webContents.send('environment-progress', {
               type: 'info',
@@ -301,22 +289,17 @@ class PythonEnvironmentManager {
 
       child.stderr.on('data', (data) => {
         const msg = data.toString();
-              
-        // 先移除所有的退格符组合
         const cleanedMsg = msg.replace(/\x08+/g, '');
-              
-        // 过滤加载动画字符
         const loadingAnimationPatterns = [
-          /^\s*[\\|\/-]\s*$/,      // 单独的加载字符
-          /^\s*[\\|\/-]\s+\d+%/ ,  // 加载字符 + 百分比
-          /^\s*\.\.\.*\s*$/,       // 省略号
-          /^[\x08\s]+$/,           // 纯退格符和空白
+          /^\s*[\\|\/-]\s*$/, 
+          /^\s*[\\|\/-]\s+\d+%/ ,
+          /^\s*\.\.\.*\s*$/, 
+          /^[\x08\s]+$/,  
         ];
               
         const isAnimation = loadingAnimationPatterns.some(pattern => pattern.test(cleanedMsg.trim()));
               
         if (!isAnimation) {
-          // 过滤 conda 版本更新警告，这不是错误
           const updateWarningPatterns = [
             /\[1\]\s*==> WARNING: A newer version of conda exists\. <==/i,
             /current version:/i,
@@ -324,12 +307,9 @@ class PythonEnvironmentManager {
             /Please update conda by running/i,
             /\$ conda update/i
           ];
-                
-          // 检查是否是版本更新警告
           const isUpdateWarning = updateWarningPatterns.some(pattern => pattern.test(cleanedMsg));
                 
           if (!isUpdateWarning) {
-            // 只有非警告信息才计为错误
             errorOutput += cleanedMsg;
             hasError = true;
                   
@@ -340,7 +320,6 @@ class PythonEnvironmentManager {
               });
             }
           } else {
-            // 版本更新警告作为普通信息发送
             if (global.mainWindow) {
               global.mainWindow.webContents.send('environment-progress', {
                 type: 'info',
@@ -349,18 +328,15 @@ class PythonEnvironmentManager {
             }
           }
         }
-        // 如果是加载动画，直接忽略不发送
       });
 
       child.on('close', async (code) => {
-        // 清除进程引用
         this.installationProcess = null;
         
         if (code === 0 && !hasError) {
           this.isInitialized = true;
           resolve({ success: true, envPath: envDir });
         } else {
-          // 安装失败，清理缓存
           console.log(`安装失败 (代码：${code})，开始清理缓存...`);
           try {
             await this.cleanupInstallationCache(envName);
@@ -371,7 +347,6 @@ class PythonEnvironmentManager {
         }
       });
       
-      // 错误处理
       child.on('error', async (err) => {
         this.installationProcess = null;
         console.error('安装进程错误:', err);
@@ -385,7 +360,7 @@ class PythonEnvironmentManager {
     });
   }
 
-  // 使用 pip 安装依赖
+  // Install dependencies using pip
   async installPackages(packages) {
     if (!this.pythonPath) {
       throw new Error('Python 路径未设置');
@@ -437,7 +412,7 @@ class PythonEnvironmentManager {
     });
   }
 
-  // 验证环境是否满足要求
+  // Validate environment meets requirements
   async validateEnvironment() {
     console.log('[DEBUG] 开始验证环境...');
     console.log(`[DEBUG] 当前 pythonPath: ${this.pythonPath}`);
@@ -446,7 +421,7 @@ class PythonEnvironmentManager {
       
     if (!this.pythonPath) {
       console.log('[DEBUG] 验证失败：Python 路径未设置');
-      // 尝试从 envPath 构建
+      // Try building from envPath
       if (this.envPath) {
         this.pythonPath = process.platform === 'win32'
           ? path.join(this.envPath, 'python.exe')
@@ -458,7 +433,6 @@ class PythonEnvironmentManager {
     }
   
     try {
-      // 检查 Python 版本
       const version = await this.getPythonVersion();
       console.log('[DEBUG] Python 版本:', version);
         
@@ -467,7 +441,6 @@ class PythonEnvironmentManager {
         return { valid: false, error: '无法获取 Python 版本' };
       }
   
-      // 检查关键依赖
       const requiredPackages = ['torch', 'torchvision', 'kornia'];
       const missingPackages = [];
   
@@ -479,7 +452,7 @@ class PythonEnvironmentManager {
         }
       }
   
-      // 检查本地扩展包
+      // Check local extensions
       const localExtensions = ['diff_gaussian_rasterization', 'simple_knn', 'nvdiffrast'];
       const missingExtensions = [];
         
@@ -504,7 +477,7 @@ class PythonEnvironmentManager {
         console.log('[DEBUG] 建议：请确认您是否在正确的 conda 环境中运行');
         console.log(`[DEBUG] 当前使用的 Python 路径：${this.pythonPath}`);
               
-        // 检查是否是 NumPy DLL 问题
+        // Check for NumPy DLL issue
         let suggestion = '';
         if (missingPackages.includes('torch') || missingPackages.includes('torchvision') || missingPackages.includes('kornia')) {
           suggestion = '\n\n检测到 PyTorch/Kornia 导入失败，可能是 NumPy DLL 加载问题。\n' +
@@ -534,7 +507,6 @@ class PythonEnvironmentManager {
     }
   }
 
-  // 获取 Python 版本
   async getPythonVersion() {
     if (!this.pythonPath) return null;
 
@@ -555,11 +527,10 @@ class PythonEnvironmentManager {
     });
   }
 
-  // 检查包是否已安装
+  // Check if a package is installed
   async checkPackageInstalled(packageName) {
     if (!this.pythonPath) {
       console.log(`[DEBUG] checkPackageInstalled: pythonPath 未设置，尝试使用 envPath: ${this.envPath}`);
-      // 如果 pythonPath 未设置，但 envPath 已设置，尝试构建 Python 路径
       if (this.envPath) {
         this.pythonPath = process.platform === 'win32'
           ? path.join(this.envPath, 'python.exe')
@@ -571,7 +542,6 @@ class PythonEnvironmentManager {
     }
 
     return new Promise((resolve) => {
-      // Windows 上使用 cmd.exe 避免 shell: true 的参数解析问题
       const args = ['-c', `import ${packageName}; print("ok")`];
       let child;
       
@@ -602,7 +572,6 @@ class PythonEnvironmentManager {
     });
   }
 
-  // 运行 Python 脚本
   runPythonScript(scriptPath, args = [], options = {}) {
     if (!this.pythonPath) {
       throw new Error('Python 环境未初始化');
@@ -626,7 +595,7 @@ class PythonEnvironmentManager {
     return child;
   }
 
-  // 获取环境信息
+  // Get environment information
   getEnvironmentInfo() {
     return {
       pythonPath: this.pythonPath,
@@ -637,7 +606,7 @@ class PythonEnvironmentManager {
     };
   }
 
-  // 清理安装缓存
+  // Clean up installation cache
   async cleanupInstallationCache(envName = 'gsir') {
     if (this.cleanupInProgress) {
       console.log('清理已在进行中，跳过');
@@ -654,13 +623,12 @@ class PythonEnvironmentManager {
         path.join(os.tmpdir(), 'conda-*'),
       ];
 
-      // 清理 Conda 包缓存
+      // Clean Conda package cache
       for (const cacheDir of cacheDirs) {
         try {
           const exists = await fs.access(cacheDir).then(() => true).catch(() => false);
           if (exists) {
             console.log(`清理缓存目录：${cacheDir}`);
-            // 只删除临时文件，保留已安装的包
             const files = await fs.readdir(cacheDir);
             for (const file of files) {
               if (file.endsWith('.tmp') || file.endsWith('.part') || file.startsWith('conda-tmp')) {
@@ -674,7 +642,7 @@ class PythonEnvironmentManager {
         }
       }
 
-      // 清理未完成的下载
+      // Clean up incomplete downloads
       if (this.condaPath) {
         const tempFiles = await this.findTempFiles(envName);
         for (const tempFile of tempFiles) {
@@ -702,7 +670,7 @@ class PythonEnvironmentManager {
     }
   }
 
-  // 查找临时文件
+  // Find temporary files
   async findTempFiles(envName) {
     const tempFiles = [];
     const searchPaths = [
@@ -724,14 +692,13 @@ class PythonEnvironmentManager {
           }
         }
       } catch (error) {
-        // 忽略读取错误
       }
     }
 
     return tempFiles;
   }
 
-  // 运行安装脚本
+  // Run installation script
   async runInstallScript(scriptPath, mode = 'auto') {
     if (!this.condaPath) {
       throw new Error('未找到 Conda');
@@ -741,7 +708,6 @@ class PythonEnvironmentManager {
     console.log('安装模式:', mode);
 
     return new Promise((resolve, reject) => {
-      // 发送开始安装的消息
       if (global.mainWindow) {
         global.mainWindow.webContents.send('environment-progress', {
           type: 'info',
@@ -749,7 +715,6 @@ class PythonEnvironmentManager {
         });
       }
 
-      // 使用 spawn 运行批处理脚本
       const child = process.platform === 'win32'
         ? spawn('cmd.exe', ['/c', scriptPath], {
             cwd: path.dirname(scriptPath),
@@ -760,7 +725,6 @@ class PythonEnvironmentManager {
             env: { ...process.env, PYTHONUTF8: '1' }
           });
 
-      // 保存当前安装进程引用
       this.installationProcess = child;
 
       let output = '';
@@ -770,36 +734,29 @@ class PythonEnvironmentManager {
       child.stdout.on('data', (data) => {
         const msg = data.toString();
         output += msg;
-              
-        // 实时解析输出，提取进度信息
         if (global.mainWindow) {
-          // 先移除所有的退格符组合
           const cleanedMsg = msg.replace(/\x08+/g, '');
-                
-          // 过滤加载动画字符
           const loadingAnimationPatterns = [
-            /^\s*[\\|\/-]\s*$/,      // 单独的加载字符
-            /^\s*[\\|\/-]\s+\d+%/ ,  // 加载字符 + 百分比
-            /^\s*\.\.\.*\s*$/,       // 省略号
-            /^[\x08\s]+$/,           // 纯退格符和空白
+            /^\s*[\\|\/-]\s*$/,
+            /^\s*[\\|\/-]\s+\d+%/ ,
+            /^\s*\.\.\.*\s*$/,
+            /^[\x08\s]+$/,
           ];
                 
           const isAnimation = loadingAnimationPatterns.some(pattern => pattern.test(cleanedMsg.trim()));
                 
           if (!isAnimation) {
-            // 发送清理后的输出
             global.mainWindow.webContents.send('environment-progress', {
               type: 'stdout',
               data: cleanedMsg
             });
           }
           
-          // 解析进度百分比并发送 info 消息
           const progressPatterns = [
             /\[(\d+)%\]/,
             /Progress:\s*(\d+)%/i,
             /Completed:\s*(\d+)%/i,
-            /(\d+)%\s*$/ // 匹配行尾的百分比
+            /(\d+)%\s*$/ 
           ];
           
           for (const pattern of progressPatterns) {
@@ -813,8 +770,6 @@ class PythonEnvironmentManager {
               break;
             }
           }
-          
-          // 检测关键阶段并发送提示（按照新的安装顺序）
           if (msg.includes('创建 Conda 环境')) {
             global.mainWindow.webContents.send('environment-progress', {
               type: 'info',
@@ -876,16 +831,12 @@ class PythonEnvironmentManager {
 
       child.stderr.on('data', (data) => {
         const msg = data.toString();
-              
-        // 先移除所有的退格符组合
         const cleanedMsg = msg.replace(/\x08+/g, '');
-              
-        // 过滤加载动画字符
         const loadingAnimationPatterns = [
-          /^\s*[\\|\/-]\s*$/,      // 单独的加载字符
-          /^\s*[\\|\/-]\s+\d+%/ ,  // 加载字符 + 百分比
-          /^\s*\.\.\.*\s*$/,       // 省略号
-          /^[\x08\s]+$/,           // 纯退格符和空白
+          /^\s*[\\|\/-]\s*$/,
+          /^\s*[\\|\/-]\s+\d+%/ , 
+          /^\s*\.\.\.*\s*$/, 
+          /^[\x08\s]+$/,
         ];
               
         const isAnimation = loadingAnimationPatterns.some(pattern => pattern.test(cleanedMsg.trim()));
@@ -904,14 +855,12 @@ class PythonEnvironmentManager {
       });
 
       child.on('close', async (code) => {
-        // 清除进程引用
         this.installationProcess = null;
         
         if (code === 0 && !hasError) {
           this.isInitialized = true;
           resolve({ success: true, message: '安装成功' });
         } else {
-          // 安装失败，清理缓存
           console.log(`安装失败 (代码：${code})，开始清理缓存...`);
           try {
             await this.cleanupInstallationCache('gsir');
@@ -922,7 +871,6 @@ class PythonEnvironmentManager {
         }
       });
       
-      // 错误处理
       child.on('error', async (err) => {
         this.installationProcess = null;
         console.error('安装进程错误:', err);
@@ -935,13 +883,10 @@ class PythonEnvironmentManager {
       });
     });
   }
-
-  // 停止当前安装
   async stopInstallation() {
     if (this.installationProcess) {
       console.log('停止安装进程...');
       
-      // Windows 上使用 taskkill 强制终止进程树
       if (process.platform === 'win32') {
         try {
           const pid = this.installationProcess.pid;
@@ -954,8 +899,6 @@ class PythonEnvironmentManager {
       }
       
       this.installationProcess = null;
-      
-      // 延迟一下再清理缓存，确保进程完全退出
       setTimeout(() => {
         this.cleanupInstallationCache();
       }, 1000);
@@ -965,5 +908,4 @@ class PythonEnvironmentManager {
     return false;
   }
 }
-
 module.exports = PythonEnvironmentManager;

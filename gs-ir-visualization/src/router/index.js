@@ -47,14 +47,11 @@ const router = createRouter({
   routes
 })
 
-// 全局路由守卫，仅对训练页面进行环境检查
 let environmentChecked = false
 let environmentValid = null
 
 router.beforeEach(async (to, from, next) => {
-  // 只在访问训练页面时检查环境
   if (to.name === 'train') {
-    // 如果还没有检查过环境，先检查
     if (!environmentChecked) {
       try {
         const envCheck = await window.electronAPI?.checkEnvironment()
@@ -63,28 +60,22 @@ router.beforeEach(async (to, from, next) => {
         
         console.log('训练页面环境检查结果:', environmentValid)
         
-        // 如果环境无效，重定向到环境页面
         if (!environmentValid) {
           next('/environment')
           return
         }
       } catch (error) {
         console.error('环境检查失败:', error)
-        // 检查失败也跳转到环境页面
         next('/environment')
         return
       }
     } else {
-      // 已经检查过环境
       if (!environmentValid) {
-        // 环境无效，强制跳转到环境页面
         next('/environment')
         return
       }
     }
   }
-  
-  // 其他页面直接放行
   next()
 })
 

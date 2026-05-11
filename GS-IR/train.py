@@ -495,6 +495,39 @@ def training(
             if iteration % 10 == 0:
                 progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{7}f}"})
                 progress_bar.update(10)
+                if iteration % 100 == 0:
+                    loss_str = f"{ema_loss_for_log:.7f}"
+                    psnr_val = None
+                    ssim_val = None
+                            
+                    # Save preview image
+                    preview_path = None
+                    try:
+                        point_dir = os.path.join(args.model_path, "point")
+                        os.makedirs(point_dir, exist_ok=True)
+                        preview_path = os.path.join(point_dir, f"render_{iteration}.png")
+                        from torchvision.utils import save_image
+                        save_image(image.clamp(0.0, 1.0), preview_path)
+                    except Exception as e:
+                        print(f"预览图保存失败：{e}", flush=True)
+                            
+                    import sys
+                    import json
+                    sys.stdout.write(f"\n=== TRAINING_ITERATION {iteration} ===\n")
+                    sys.stdout.write(f"LOSS_VALUE: {loss_str}\n")
+                    if preview_path:
+                        sys.stdout.write(f"PREVIEW_SAVED: {preview_path}\n")
+                    sys.stdout.write(f"=== END_ITERATION {iteration} ===\n")
+                    state_update = {
+                        "iter": iteration,
+                        "loss": float(loss_str),
+                        "psnr": None,
+                        "ssim": None, 
+                        "preview": preview_path
+                    }
+                    sys.stdout.write(f"TRAINING_STATE_UPDATE: {json.dumps(state_update)}\n")
+                    sys.stdout.flush()
+                            
             if iteration == opt.iterations:
                 progress_bar.close()
 
@@ -635,7 +668,7 @@ def training_report(
         tb_writer.add_scalar("iter_time", elapsed, iteration)
 
     # Report test and samples of training set
-    if iteration in testing_iterations:
+    if iteration in testing_iterations or iteration % 1000 == 0:
         torch.cuda.empty_cache()
         validation_configs = (
             {"name": "test", "cameras": scene.getTestCameras()},
@@ -836,8 +869,13 @@ def training_report(
                 ssim_test /= len(config["cameras"])
                 l1_test /= len(config["cameras"])
                 print(
-                    f"\n[ITER {iteration}] Evaluating {config['name']}: L1 {l1_test:.6f} PSNR {psnr_test:.6f} SSIM {ssim_test:.6f}"
+                    f"\n[ITER {iteration}] Evaluating {config['name']}: L1 {l1_test:.6f} PSNR: {psnr_test:.6f} SSIM {ssim_test:.6f}"
                 )
+                import sys
+                sys.stdout.write(f"EVAL_{config['name'].upper()}_L1: {l1_test:.6f}\n")
+                sys.stdout.write(f"EVAL_{config['name'].upper()}_PSNR: {psnr_test:.6f}\n")
+                sys.stdout.write(f"EVAL_{config['name'].upper()}_SSIM: {ssim_test:.6f}\n")
+                sys.stdout.flush()
                 if tb_writer:
                     tb_writer.add_scalar(
                         config["name"] + "/loss_viewpoint - l1_loss", l1_test, iteration

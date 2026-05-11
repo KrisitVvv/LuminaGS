@@ -1,14 +1,23 @@
 <template>
   <section class="train-container">
     <div class="train-content">
-      <!-- 左侧参数设置 -->
       <div class="params-panel">
         <h3 class="panel-title">训练参数</h3>
         <div class="params-form">
           <div class="form-group">
+            <label class="form-label">项目名称</label>
+            <input 
+              class="text-input" 
+              v-model="projectName" 
+              placeholder="留空则自动生成（如 project_20250405_1430）"
+              @blur="sanitizeProjectName; triggerAutoSave()"
+            >
+          </div>
+          
+          <div class="form-group">
             <label class="form-label">输出路径 (-m)</label>
             <div class="input-group">
-              <input class="path-input" v-model="modelPath" placeholder="outputs/lego/">
+              <input class="path-input" v-model="modelPath" placeholder="outputs/lego/" @blur="triggerAutoSave()">
               <button class="browse-btn" @click="selectFolder('modelPath')"><span class="iconify" data-icon="solar:folder-linear"></span></button>
             </div>
           </div>
@@ -16,20 +25,20 @@
           <div class="form-group">
             <label class="form-label">数据集路径 (-s)</label>
             <div class="input-group">
-              <input class="path-input" v-model="sourcePath" placeholder="datasets/TensoIR/lego/">
+              <input class="path-input" v-model="sourcePath" placeholder="datasets/TensoIR/lego/" @blur="triggerAutoSave()">
               <button class="browse-btn" @click="selectFolder('sourcePath')"><span class="iconify" data-icon="solar:folder-linear"></span></button>
             </div>
           </div>
           
           <div class="form-group">
             <label class="form-label">训练轮次 (Iterations)</label>
-            <input class="number-input" type="number" v-model.number="iterations">
+            <input class="number-input" type="number" v-model.number="iterations" @change="triggerAutoSave()">
           </div>
           
           <div class="form-group">
             <label class="form-label">Baking 检查点</label>
             <div class="input-group">
-              <input class="path-input" v-model="checkpoint" placeholder="outputs/lego/chkpnt30000.pth">
+              <input class="path-input" v-model="checkpoint" placeholder="outputs/lego/chkpnt30000.pth" @blur="triggerAutoSave()">
               <button class="browse-btn" @click="selectFile('checkpoint')"><span class="iconify" data-icon="solar:file-linear"></span></button>
             </div>
           </div>
@@ -38,18 +47,23 @@
             <h4 class="section-title">Stage1 参数</h4>
             <div class="checkbox-group">
               <label class="checkbox-label">
-                <input type="checkbox" v-model="evalMode">
+                <input type="checkbox" v-model="evalMode" @change="triggerAutoSave()">
                 <span>评估模式 (--eval)</span>
               </label>
             </div>
             <div class="form-group" style="margin-top: 0.75rem;">
               <label class="form-label">分辨率压缩 (-r)</label>
-              <select class="select-input" v-model.number="resolution">
+              <select class="select-input" v-model.number="resolution" @change="handleResolutionChange; triggerAutoSave()">
                 <option :value="1">原始分辨率 (1/1)</option>
                 <option :value="2">1/2 分辨率</option>
                 <option :value="4">1/4 分辨率</option>
                 <option :value="8">1/8 分辨率</option>
+                <option :value="16">1/16 分辨率</option>
               </select>
+              <div v-if="resolution === 16" class="help-text">
+                <span class="iconify" data-icon="solar:info-circle-linear"></span>
+                使用 image_8 目录，-r 参数自动设为 2
+              </div>
             </div>
           </div>
           
@@ -57,15 +71,15 @@
             <h4 class="section-title">Baking 参数</h4>
             <div class="form-group">
               <label class="form-label">Bound</label>
-              <input class="number-input" type="number" step="0.1" v-model.number="bound">
+              <input class="number-input" type="number" step="0.1" v-model.number="bound" @change="triggerAutoSave()">
             </div>
             <div class="form-group">
               <label class="form-label">Occlusion Resolution</label>
-              <input class="number-input" type="number" v-model.number="occluRes">
+              <input class="number-input" type="number" v-model.number="occluRes" @change="triggerAutoSave()">
             </div>
             <div class="form-group">
               <label class="form-label">Occlusion Threshold</label>
-              <input class="number-input" type="number" step="0.01" v-model.number="occlusion">
+              <input class="number-input" type="number" step="0.01" v-model.number="occlusion" @change="triggerAutoSave()">
             </div>
           </div>
           
@@ -73,35 +87,48 @@
             <h4 class="section-title">Stage2 参数</h4>
             <div class="checkbox-group">
               <label class="checkbox-label">
-                <input type="checkbox" v-model="gamma">
+                <input type="checkbox" v-model="gamma" @change="triggerAutoSave()">
                 <span>Gamma 校正 (--gamma)</span>
               </label>
               <label class="checkbox-label">
-                <input type="checkbox" v-model="indirect">
+                <input type="checkbox" v-model="indirect" @change="triggerAutoSave()">
                 <span>间接光照 (--indirect)</span>
               </label>
             </div>
           </div>
           
           <div class="actions-section">
-            <button class="start-btn" @click="startStage1" :disabled="isTraining">
-              <span class="iconify" data-icon="solar:play-bold"></span> 开始 Stage1
-            </button>
-            
-            <button class="baking-btn" @click="startBaking" :disabled="isBaking || !canStartBaking">
-              <span class="iconify" data-icon="solar:cookie-linear"></span> 开始 Baking
-            </button>
-            
-            <button class="start-btn stage2-btn" @click="startStage2" :disabled="isTraining || !canStartStage2">
-              <span class="iconify" data-icon="solar:play-bold"></span> 开始 Stage2
+            <button class="start-full-btn" @click="startFullTraining" :disabled="isTraining || isBaking">
+              <span class="iconify" data-icon="solar:play-bold"></span> 
+              {{ isTraining || isBaking ? '训练中...' : '开始训练' }}
             </button>
             
             <div class="control-buttons">
-              <button class="pause-btn" @click="pauseTraining" :disabled="!isTraining">暂停</button>
               <button class="stop-btn" @click="stopTraining" :disabled="!isTraining && !isBaking">终止</button>
             </div>
             
-            <!-- 数据集转换提示 -->
+            <div v-if="showRetryDeleteButtons" class="retry-delete-buttons">
+              <button class="retry-btn" @click="retryTraining" :disabled="!currentProjectId">
+                <span class="iconify" data-icon="solar:refresh-linear"></span>
+                重试
+              </button>
+              <button class="delete-btn" @click="deleteProject" :disabled="!currentProjectId">
+                <span class="iconify" data-icon="solar:trash-bin-trash-linear"></span>
+                删除
+              </button>
+            </div>
+            
+            <div v-if="showCompleteButtons" class="complete-buttons">
+              <button class="save-btn" @click="saveToProjects" :disabled="!currentProjectId">
+                <span class="iconify" data-icon="solar:diskette-bold"></span>
+                保存到项目列表
+              </button>
+              <button class="delete-btn" @click="deleteProject" :disabled="!currentProjectId">
+                <span class="iconify" data-icon="solar:trash-bin-trash-linear"></span>
+                删除
+              </button>
+            </div>
+            
             <div v-if="needsConversion" class="conversion-alert">
               <div class="alert-icon">
                 <span class="iconify" data-icon="solar:danger-circle-linear"></span>
@@ -110,15 +137,15 @@
                 <div class="alert-title">需要转换数据集格式</div>
                 <div class="alert-text">当前数据集不符合 TensoIR 或 Mip-NeRF 360 规范，需要使用 COLMAP 进行处理。</div>
               </div>
-              <button class="convert-btn" @click="startConversion">
-                <span class="iconify" data-icon="solar:refresh-linear"></span> 开始转换
+              <button class="convert-btn" @click="startConversion" :disabled="isConverting">
+                <span class="iconify" :class="{ 'spin-icon': isConverting }" :data-icon="isConverting ? 'solar:refresh-linear' : 'solar:refresh-linear'"></span> 
+                {{ isConverting ? '转换中...' : '开始转换' }}
               </button>
             </div>
           </div>
         </div>
       </div>
       
-      <!-- 右侧监控与预览 -->
       <div class="monitoring-panel">
         <div class="tabs-header">
           <button 
@@ -137,7 +164,8 @@
           </button>
         </div>
         
-        <div v-if="activeTab === 'training'" class="tab-content">
+        <div v-show="activeTab === 'training'" class="tab-content">
+          
           <div class="charts-grid">
             <div class="chart-card">
               <h4 class="chart-title">损失函数 (Loss)</h4>
@@ -147,14 +175,28 @@
               <h4 class="chart-title">峰值信噪比 (PSNR)</h4>
               <div ref="psnrChart" class="chart-container"></div>
             </div>
+            <div class="chart-card">
+              <h4 class="chart-title">结构相似性 (SSIM)</h4>
+              <div ref="ssimChart" class="chart-container"></div>
+            </div>
+            <div class="chart-card">
+              <h4 class="chart-title">评估 L1 (Eval L1)</h4>
+              <div ref="evalL1Chart" class="chart-container"></div>
+            </div>
           </div>
           
           <div class="preview-card">
-            <h4 class="preview-title">动态迭代预览</h4>
+            <div class="preview-header">
+              <h4 class="preview-title">动态迭代预览</h4>
+              <button class="refresh-preview-btn" @click="updatePreviewImage" :disabled="!modelPath">
+                <span class="iconify" data-icon="solar:refresh-linear"></span>
+                刷新预览
+              </button>
+            </div>
             <div class="preview-container">
               <img v-if="previewImage" class="preview-image" :src="previewImage" alt="Training Preview">
               <div v-else class="preview-placeholder">等待训练数据...</div>
-              <div class="iteration-overlay">Iter: {{ currentIteration }} / {{ iterations }}</div>
+              <div class="iteration-overlay">Iter: {{ currentIteration }} / 40000</div>
             </div>
           </div>
           
@@ -169,7 +211,7 @@
           </div>
         </div>
         
-        <div v-if="activeTab === 'baking'" class="tab-content">
+        <div v-show="activeTab === 'baking'" class="tab-content">
           <div class="baking-status">
             <div class="status-item">
               <span class="status-label">状态:</span>
@@ -196,6 +238,49 @@
         </div>
       </div>
     </div>
+    
+    <div v-if="isConverting" class="conversion-modal-overlay">
+      <div class="conversion-modal">
+        <div class="modal-header">
+          <h3 class="modal-title">
+            <span class="iconify spin-icon" data-icon="solar:refresh-linear"></span>
+            正在运行 COLMAP
+          </h3>
+        </div>
+        
+        <div class="modal-body">
+          <div class="loading-animation">
+            <div class="spinner-ring"></div>
+            <div class="spinner-ring"></div>
+            <div class="spinner-ring"></div>
+          </div>
+          <div class="progress-info">
+            <p class="loading-text">正在进行特征提取和三维重建</p>
+            <p class="loading-subtext">这可能需要几分钟到几小时，取决于图片数量和设备性能</p>
+          </div>
+          
+          <div class="conversion-log-container">
+            <div class="log-header">
+              <span class="iconify" data-icon="solar:file-text-linear"></span>
+              COLMAP 输出日志
+            </div>
+            <div ref="conversionLogContainer" class="log-output">
+              <div v-for="(log, index) in conversionLogs" :key="index" class="log-line" :class="log.type">
+                <span class="log-time">{{ log.time }}</span>
+                <span class="log-message">{{ log.message }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="modal-footer">
+          <button class="cancel-btn" @click="stopConversion" :disabled="isStopping">
+            <span class="iconify" data-icon="solar:stop-circle-linear"></span>
+            {{ isStopping ? '停止中...' : '取消转换' }}
+          </button>
+        </div>
+      </div>
+    </div>
   </section>
 </template>
 
@@ -207,6 +292,7 @@ export default {
   data() {
     return {
       // 训练参数
+      projectName: '', 
       modelPath: 'outputs/lego/',
       sourcePath: 'datasets/TensoIR/lego/',
       iterations: 30000,
@@ -216,47 +302,53 @@ export default {
       indirect: false,
       bound: 1.5,
       occluRes: 128,
-      resolution: 1, // 分辨率压缩参数，1、2、4、8 分别表示 1/1、1/2、1/4、1/8
+      resolution: 1,
       
-      // 训练状态
       isTraining: false,
       isBaking: false,
+      trainingStatus: 'idle', // idle, running, completed, error
+      bakingStatus: 'idle', // idle, running, completed, error
       currentIteration: 0,
       activeTab: 'training',
       
-      // 图表实例
       lossChartInstance: null,
       psnrChartInstance: null,
+      ssimChartInstance: null,
+      evalL1ChartInstance: null, 
+      resizeObserver: null,
       
-      // 图表数据
       lossData: [],
       psnrData: [],
+      ssimData: [],
+      evalL1Data: [],
       
-      // 日志
       logs: [],
       bakingLogs: [],
       
-      // 预览
       previewImage: null,
             
-      // Baking 状态
       bakingStatus: 'idle', // idle, running, completed, error
       bakingProgress: 0,
             
-      // 定时器
       trainingTimer: null,
       
-      // 数据集格式
       datasetFormat: 'unknown', // unknown, tensoir, mipnerf360, custom
       needsConversion: false,
       conversionProgress: 0,
       isConverting: false,
-            
-      // 数据集格式
-      datasetFormat: 'unknown', // unknown, tensoir, mipnerf360, custom
-      needsConversion: false,
-      conversionProgress: 0,
-      isConverting: false,
+      isStopping: false,
+      
+      conversionLogs: [],
+      
+      imageSubdir: 'images',
+      
+      currentProjectId: null,
+      
+      saveDebounceTimer: null,
+      isLoadingProject: false,
+      showRetryDeleteButtons: false,
+      showCompleteButtons: false,
+      userCancelled: false
     }
   },
   computed: {
@@ -265,6 +357,15 @@ export default {
     },
     canStartStage2() {
       return this.checkpoint && this.checkpoint.endsWith('.pth');
+    },
+    trainingStatusText() {
+      const statusMap = {
+        idle: '未开始',
+        running: '进行中',
+        completed: '已完成',
+        error: '错误'
+      };
+      return statusMap[this.trainingStatus] || '未知';
     },
     bakingStatusText() {
       const statusMap = {
@@ -276,10 +377,51 @@ export default {
       return statusMap[this.bakingStatus] || '未知';
     }
   },
-  mounted() {
+  async mounted() {
     this.initCharts();
     this.setupIPCListeners();
     window.addEventListener('resize', this.handleResize);
+    window.addEventListener('window-maximized', this.handleWindowMaximized);
+    window.addEventListener('window-restored', this.handleWindowRestored);
+    this.setupResizeObserver();
+    
+    // 检查resumeProjectId 参数
+    if (this.$route.query.resumeProjectId) {
+      await this.loadProjectFromRoute();
+    } else {
+      console.log('[新建训练] 清空之前的动态数据...');
+      this.lossData = [];
+      this.psnrData = [];
+      this.ssimData = [];
+      this.evalL1Data = [];
+      this.logs = [];
+      this.bakingLogs = [];
+      this.currentIteration = 0;
+      this.previewImage = null;
+      this.isTraining = false;
+      this.isBaking = false;
+      this.currentProjectId = null;
+    }
+    
+    // 检查预览图
+    if (this.$route.query.initialPreviewImage) {
+      console.log('[初始预览] 收到来自 ProgressPage 的预览图');
+      console.log('[初始预览] Base64 长度:', this.$route.query.initialPreviewImage.length);
+      console.log('[初始预览] Base64 前缀:', this.$route.query.initialPreviewImage.substring(0, 22));
+      
+      // 使用 Image 对象预加载
+      const img = new Image();
+      img.onload = () => {
+        console.log('[初始预览] 图片预加载成功，更新到界面');
+        this.previewImage = this.$route.query.initialPreviewImage;
+      };
+      img.onerror = (err) => {
+        console.error('[初始预览] 图片预加载失败:', err);
+        this.previewImage = this.$route.query.initialPreviewImage;
+      };
+      img.src = this.$route.query.initialPreviewImage;
+      this.$router.replace({ query: { ...this.$route.query, initialPreviewImage: undefined } });
+    }
   },
   beforeUnmount() {
     if (this.lossChartInstance) {
@@ -288,11 +430,515 @@ export default {
     if (this.psnrChartInstance) {
       this.psnrChartInstance.dispose();
     }
+    if (this.ssimChartInstance) {
+      this.ssimChartInstance.dispose();
+    }
+    if (this.evalL1ChartInstance) {
+      this.evalL1ChartInstance.dispose();
+    }
     window.removeEventListener('resize', this.handleResize);
+    window.removeEventListener('window-maximized', this.handleWindowMaximized);
+    window.removeEventListener('window-restored', this.handleWindowRestored);
+    if (this.resizeObserver) {
+      this.resizeObserver.disconnect();
+    }
   },
   methods: {
+    async handleResolutionChange() {
+      // 分辨率压缩逻辑优化：
+      // 1. 优先查找预压缩目录（images_2, images_4, images_8）
+      // 2. 如果预压缩目录不存在，回退到 images 目录并使用 -r 参数
+      // 3. imageSubdir 决定输入来源，resolution 参数决定最终输出压缩比
+      let preferredSubdir = 'images';
+      let fallbackNeeded = false;
+      
+      if (this.resolution === 16) {
+        if (await this.checkDirectoryExists('images_8')) {
+          preferredSubdir = 'images_8';
+        } else if (await this.checkDirectoryExists('images_4')) {
+          preferredSubdir = 'images_4';
+        } else {
+          preferredSubdir = 'images';
+          fallbackNeeded = true;
+        }
+      } else if (this.resolution === 8) {
+        if (await this.checkDirectoryExists('images_8')) {
+          preferredSubdir = 'images_8';
+        } else {
+          preferredSubdir = 'images';
+          fallbackNeeded = true;
+        }
+      } else if (this.resolution === 4) {
+        if (await this.checkDirectoryExists('images_4')) {
+          preferredSubdir = 'images_4';
+        } else {
+          preferredSubdir = 'images';
+          fallbackNeeded = true;
+        }
+      } else if (this.resolution === 2) {
+        if (await this.checkDirectoryExists('images_2')) {
+          preferredSubdir = 'images_2';
+        } else {
+          preferredSubdir = 'images';
+          fallbackNeeded = true;
+        }
+      } else {
+        preferredSubdir = 'images';
+      }
+      
+      this.imageSubdir = preferredSubdir;
+      
+      // 构建日志信息
+      if (fallbackNeeded) {
+        this.addLog(`分辨率 1/${this.resolution}：未找到预压缩目录，使用 ${this.imageSubdir} + -r ${this.resolution} 参数`, 'info');
+      } else {
+        this.addLog(`分辨率 1/${this.resolution}：使用预压缩目录 ${this.imageSubdir}`, 'success');
+      }
+    },
+    
+    // 清理项目名称（
+    sanitizeProjectName() {
+      if (this.projectName) {
+        this.projectName = this.projectName.replace(/[^a-zA-Z0-9\u4e00-\u9fa5_]/g, '_');
+      }
+    },
+    
+    // 生成默认项目名称
+    generateDefaultProjectName() {
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = String(now.getMonth() + 1).padStart(2, '0');
+      const day = String(now.getDate()).padStart(2, '0');
+      const hours = String(now.getHours()).padStart(2, '0');
+      const minutes = String(now.getMinutes()).padStart(2, '0');
+      return `project_${year}${month}${day}_${hours}${minutes}`;
+    },
+    
+    // 检查数据集目录下的子目录是否存在
+    async checkDirectoryExists(subdirName) {
+      try {
+        if (!this.sourcePath) {
+          return false;
+        }
+        const result = await window.electronAPI?.checkDirectoryExists({
+          basePath: this.sourcePath,
+          subdir: subdirName
+        });
+        return result?.exists || false;
+      } catch (error) {
+        console.error(`检查目录 ${subdirName} 失败:`, error);
+        return false;
+      }
+    },
+    
+    async loadProjectFromRoute() {
+      const projectId = this.$route.query.resumeProjectId;
+      if (!projectId) {
+        console.warn('[加载项目] 未找到 projectId 参数');
+        return;
+      }
+      this.isLoadingProject = true;
+      console.log('[加载项目] 设置加载中标记，暂停自动保存');
+      this.userCancelled = false;
+      // 设置当前项目 ID
+      this.currentProjectId = projectId;
+      console.log('[加载项目] 设置 currentProjectId:', projectId);
+      
+      console.log('[加载项目] 准备加载项目:', projectId);
+      
+      try {
+        const result = await window.electronAPI?.getProjectDetail(projectId);
+        
+        if (!result?.success || !result?.data) {
+          throw new Error(result?.error || '加载项目失败');
+        }
+        
+        const project = result.data;
+        console.log('[加载项目] 成功获取项目配置:', project);
+        console.log('[加载项目] 清空之前的动态数据...');
+        this.lossData = [];
+        this.psnrData = [];
+        this.ssimData = [];
+        this.evalL1Data = [];
+        this.logs = [];
+        this.bakingLogs = [];
+        this.currentIteration = 0;
+        this.previewImage = null;
+        console.log('[加载项目] ✓ 动态数据已清空');
+        
+        // 填充表单字段
+        this.projectName = project.name || '';
+        this.modelPath = project.outputPath || '';
+        this.sourcePath = project.sourcePath || '';
+        this.iterations = project.totalIterations || 30000;
+        this.evalMode = project.config?.evalMode ?? true;
+        this.resolution = project.config?.resolution ?? 1;
+        this.gamma = project.config?.gamma ?? false;
+        this.indirect = project.config?.indirect ?? false;
+        this.bound = project.config?.bound ?? 1.5;
+        this.occluRes = project.config?.occluRes ?? 128;
+        this.occlusion = project.config?.occlusion ?? 0.8;
+        
+        // 恢复检查点路径
+        if (project.checkpoint && project.checkpoint.trim()) {
+          this.checkpoint = project.checkpoint;
+          console.log('[加载项目] 恢复 checkpoint 路径:', this.checkpoint);
+        } else if (project.stage === 'stage2' || project.stage === 'baking') {
+          // 则从 outputPath 推导
+          const lastSlashIndex = project.outputPath.lastIndexOf('/');
+          const lastBackslashIndex = project.outputPath.lastIndexOf('\\');
+          const lastIndex = Math.max(lastSlashIndex, lastBackslashIndex);
+          
+          if (lastIndex !== -1) {
+            const baseDir = project.outputPath.substring(0, lastIndex);
+            this.checkpoint = `${baseDir}/chkpnt${project.currentIteration || 30000}.pth`;
+            console.log('[加载项目] 从 outputPath 推导 checkpoint 路径:', this.checkpoint);
+          } else {
+            this.checkpoint = `${project.outputPath}/chkpnt${project.currentIteration || 30000}.pth`;
+            console.log('[加载项目] outputPath 无分隔符，直接使用:', this.checkpoint);
+          }
+        }
+        
+        if (project.status === 'training') {
+          this.isTraining = true;
+          console.log('[加载项目] 恢复训练状态：isTraining = true');
+        }
+        if (project.stage === 'baking' || project.bakingStatus === 'running') {
+          this.isBaking = true;
+          this.bakingStatus = 'running';
+          console.log('[加载项目] 恢复烘焙状态：isBaking = true, bakingStatus = running');
+        }
+        
+        // 恢复 Baking 状态
+        if (project.bakingStatus !== undefined && project.bakingStatus !== 'running') {
+          this.bakingStatus = project.bakingStatus;
+          console.log('[加载项目] 恢复 baking 状态:', this.bakingStatus);
+        }
+        if (project.bakingProgress !== undefined) {
+          this.bakingProgress = project.bakingProgress;
+          console.log('[加载项目] 恢复 baking 进度:', this.bakingProgress);
+        }
+        if (project.bakingLogs && Array.isArray(project.bakingLogs)) {
+          this.bakingLogs = project.bakingLogs;
+          console.log('[加载项目] 恢复 baking 日志:', this.bakingLogs.length, '条');
+          this.$nextTick(() => {
+            if (this.$refs.bakingLogContainer) {
+              this.$refs.bakingLogContainer.scrollTop = this.$refs.bakingLogContainer.scrollHeight;
+            }
+          });
+        }
+        // 恢复图表数据
+        if (project.metrics) {
+          this.lossData = project.metrics.lossHistory || [];
+          this.psnrData = project.metrics.psnrHistory || [];
+          this.ssimData = project.metrics.ssimHistory || [];
+          this.evalL1Data = project.metrics.evalL1History || []; 
+          console.log('[加载项目] 恢复图表数据:', {
+            loss: this.lossData.length,
+            psnr: this.psnrData.length,
+            ssim: this.ssimData.length,
+            evalL1: this.evalL1Data.length
+          });
+          
+          this.$nextTick(() => {
+            this.updateLossChart();
+            this.updatePsnrChart();
+            this.updateSsimChart();
+            this.updateEvalL1Chart();
+          });
+        }
+        this.currentIteration = project.currentIteration || 0;
+        
+        // 设置状态
+        if (project.status === 'training') {
+          this.isTraining = true;
+          this.addLog(`已恢复项目：${project.name}`, 'success');
+          this.addLog(`继续训练 - 当前迭代：${this.currentIteration}`, 'info');
+        } else if (project.status === 'waiting') {
+          this.addLog(`项目已在队列中等待：${project.name}`, 'info');
+        } else if (project.status === 'completed') {
+          this.addLog(`项目已完成：${project.name}`, 'success');
+          this.showCompleteButtons = true;
+        } else if (project.status === 'error') {
+          this.addLog(`项目发生错误：${project.name}`, 'error');
+          this.trainingStatus = 'error';
+          this.showRetryDeleteButtons = true;
+          this.addLog('可以选择重试或删除项目', 'warning');
+        }
+        
+        // 分辨率选择
+        await this.handleResolutionChange();
+        
+        // 加载最新渲染预览图
+        console.log('[加载项目] 准备加载最新渲染预览图...');
+        await this.updatePreviewImage();
+        console.log('[加载项目] 项目配置加载完成');
+        this.$nextTick(() => {
+          this.isLoadingProject = false;
+          console.log('[加载项目] 清除加载标记，恢复自动保存');
+        });
+        
+      } catch (error) {
+        console.error('[加载项目] 失败:', error);
+        this.addLog(`加载项目失败：${error.message}`, 'error');
+        alert(`恢复项目失败：${error.message}`);
+        this.isLoadingProject = false;
+      }
+    },
+    
+    // 更新 Loss 图表
+    updateLossChart() {
+      if (!this.lossChartInstance) {
+        console.warn('Loss 图表实例未初始化');
+        return;
+      }
+      
+      try {
+        console.log('[更新 Loss 图表] 原始数据数量:', this.lossData.length);
+        const xData = this.lossData.map(item => {
+          return (item.iteration || item.iter || 0).toString();
+        });
+        
+        const seriesData = this.lossData.map(item => {
+          if (item.value !== undefined && item.value !== null) {
+            return parseFloat(item.value);
+          }
+          if (item.loss !== undefined && item.loss !== null) {
+            return parseFloat(item.loss);
+          }
+          return null;
+        }).filter(v => v !== null);
+        console.log('[更新 Loss 图表] 有效数据数量:', seriesData.length);
+        this.lossChartInstance.setOption({
+          xAxis: { data: xData },
+          series: [{ data: seriesData }]
+        });
+      } catch (error) {
+        console.error('更新 Loss 图表失败:', error);
+      }
+    },
+    
+    // 更新 PSNR 图表
+    updatePsnrChart() {
+      if (!this.psnrChartInstance) {
+        console.warn('PSNR 图表实例未初始化');
+        return;
+      }
+      try {
+        console.log('[更新 PSNR 图表] 原始数据数量:', this.psnrData.length);
+        const xData = this.psnrData.map(item => {
+          return (item.iteration || item.iter || 0).toString();
+        });
+        
+        const seriesData = this.psnrData.map(item => {
+          if (item.value !== undefined && item.value !== null) {
+            return parseFloat(item.value);
+          }
+          if (item.psnr !== undefined && item.psnr !== null) {
+            return parseFloat(item.psnr);
+          }
+          return null;
+        }).filter(v => v !== null);
+        
+        console.log('[更新 PSNR 图表] 有效数据数量:', seriesData.length);
+        
+        this.psnrChartInstance.setOption({
+          xAxis: { data: xData },
+          series: [{ data: seriesData }]
+        });
+      } catch (error) {
+        console.error('更新 PSNR 图表失败:', error);
+      }
+    },
+    
+    // 更新 SSIM 图表
+    updateSsimChart() {
+      if (!this.ssimChartInstance) {
+        console.warn('SSIM 图表实例未初始化');
+        return;
+      }
+      
+      try {
+        console.log('[更新 SSIM 图表] 原始数据数量:', this.ssimData.length);
+        const xData = this.ssimData.map(item => {
+          return (item.iteration || item.iter || 0).toString();
+        });
+        
+        const seriesData = this.ssimData.map(item => {
+          if (item.value !== undefined && item.value !== null) {
+            return parseFloat(item.value);
+          }
+          if (item.ssim !== undefined && item.ssim !== null) {
+            return parseFloat(item.ssim);
+          }
+          return null;
+        }).filter(v => v !== null);
+        
+        console.log('[更新 SSIM 图表] 有效数据数量:', seriesData.length);
+        
+        this.ssimChartInstance.setOption({
+          xAxis: { data: xData },
+          series: [{ data: seriesData }]
+        });
+      } catch (error) {
+        console.error('更新 SSIM 图表失败:', error);
+      }
+    },
+    updateEvalL1Chart() {
+      if (!this.evalL1ChartInstance) {
+        console.warn('Eval L1 图表实例未初始化');
+        return;
+      }
+      
+      try {
+        console.log('[更新 Eval L1 图表] 原始数据数量:', this.evalL1Data.length);
+        const xData = this.evalL1Data.map(item => {
+          return (item.iteration || item.iter || 0).toString();
+        });
+        
+        const seriesData = this.evalL1Data.map(item => {
+          if (item.value !== undefined && item.value !== null) {
+            return parseFloat(item.value);
+          }
+          if (item.evalL1 !== undefined && item.evalL1 !== null) {
+            return parseFloat(item.evalL1);
+          }
+          return null;
+        }).filter(v => v !== null);
+        
+        console.log('[更新 Eval L1 图表] 有效数据数量:', seriesData.length);
+        
+        this.evalL1ChartInstance.setOption({
+          xAxis: { data: xData },
+          series: [{ data: seriesData }]
+        });
+      } catch (error) {
+        console.error('更新 Eval L1 图表失败:', error);
+      }
+    },
+    
+    setupResizeObserver() {
+      this.$nextTick(() => {
+        const chartsGrid = document.querySelector('.charts-grid');
+        if (chartsGrid) {
+          console.log('[响应式布局] 开始监听图表容器，初始宽度:', chartsGrid.offsetWidth);
+          
+          let resizeTimer = null;
+          
+          this.resizeObserver = new ResizeObserver(entries => {
+            for (let entry of entries) {
+              const { width } = entry.contentRect;
+              console.log('[窗体大小] 图表容器宽度:', width.toFixed(2), 'px');
+              clearTimeout(resizeTimer);
+              resizeTimer = setTimeout(() => {
+                if (width < 600) {
+                  chartsGrid.style.gridTemplateColumns = '1fr';
+                  console.log('[布局切换] 单列模式');
+                } else {
+                  chartsGrid.style.gridTemplateColumns = 'repeat(2, 1fr)';
+                  console.log('[布局切换] 2x2 网格模式');
+                }
+                this.$nextTick(() => {
+                  setTimeout(() => {
+                    if (this.lossChartInstance) {
+                      this.lossChartInstance.resize();
+                      console.log('[图表调整] Loss 图表已调整');
+                    }
+                    if (this.psnrChartInstance) {
+                      this.psnrChartInstance.resize();
+                      console.log('[图表调整] PSNR 图表已调整');
+                    }
+                    if (this.ssimChartInstance) {
+                      this.ssimChartInstance.resize();
+                      console.log('[图表调整] SSIM 图表已调整');
+                    }
+                    if (this.evalL1ChartInstance) {
+                      this.evalL1ChartInstance.resize();
+                      console.log('[图表调整] Eval L1 图表已调整');
+                    }
+                  }, 50); 
+                });
+              }, 100);
+            }
+          });
+          
+          this.resizeObserver.observe(chartsGrid);
+          console.log('[响应式布局] ResizeObserver 已启动');
+        } else {
+          console.warn('[响应式布局] 未找到 .charts-grid 元素');
+        }
+      });
+    },
+    
+    handleResize() {
+      this.$nextTick(() => {
+        if (this.lossChartInstance) {
+          this.lossChartInstance.resize();
+        }
+        if (this.psnrChartInstance) {
+          this.psnrChartInstance.resize();
+        }
+        if (this.ssimChartInstance) {
+          this.ssimChartInstance.resize();
+        }
+        if (this.evalL1ChartInstance) {
+          this.evalL1ChartInstance.resize();
+        }
+      });
+    },
+    
+    handleWindowMaximized() {
+      console.log('[窗口状态] 最大化/全屏，调整图表...');
+      this.$nextTick(() => {
+        if (this.lossChartInstance) {
+          this.lossChartInstance.resize();
+        }
+        if (this.psnrChartInstance) {
+          this.psnrChartInstance.resize();
+        }
+        if (this.ssimChartInstance) {
+          this.ssimChartInstance.resize();
+        }
+        if (this.evalL1ChartInstance) {
+          this.evalL1ChartInstance.resize();
+        }
+      });
+    },
+    
+    handleWindowRestored() {
+      console.log('[窗口状态] 恢复窗口模式，调整图表...');
+      setTimeout(() => {
+        this.$nextTick(() => {
+          if (this.lossChartInstance) {
+            this.lossChartInstance.resize();
+            console.log('[窗口状态] Loss 图表已调整');
+          }
+          if (this.psnrChartInstance) {
+            this.psnrChartInstance.resize();
+            console.log('[窗口状态] PSNR 图表已调整');
+          }
+          if (this.ssimChartInstance) {
+            this.ssimChartInstance.resize();
+            console.log('[窗口状态] SSIM 图表已调整');
+          }
+          if (this.evalL1ChartInstance) {
+            this.evalL1ChartInstance.resize();
+            console.log('[窗口状态] Eval L1 图表已调整');
+          }
+          
+          const chartsGrid = document.querySelector('.charts-grid');
+          if (chartsGrid) {
+            console.log('[窗口状态] 图表容器尺寸:', {
+              width: chartsGrid.offsetWidth,
+              height: chartsGrid.offsetHeight,
+              gridTemplateColumns: chartsGrid.style.gridTemplateColumns
+            });
+          }
+        });
+      }, 200);
+    },
+    
     initCharts() {
-      // 初始化 Loss 图表
       const lossChartEl = this.$refs.lossChart;
       if (lossChartEl) {
         this.lossChartInstance = echarts.init(lossChartEl);
@@ -303,7 +949,7 @@ export default {
           },
           xAxis: {
             type: 'category',
-            name: 'Iteration',
+            name: '',
             data: [],
             axisLabel: {
               rotate: 45
@@ -346,9 +992,13 @@ export default {
             containLabel: true
           }
         });
+      
+        setTimeout(() => {
+          this.lossChartInstance.resize();
+        }, 100);
       }
       
-      // 初始化 PSNR 图表
+      // 初始化 PSNR
       const psnrChartEl = this.$refs.psnrChart;
       if (psnrChartEl) {
         this.psnrChartInstance = echarts.init(psnrChartEl);
@@ -359,7 +1009,7 @@ export default {
           },
           xAxis: {
             type: 'category',
-            name: 'Iteration',
+            name: '',
             data: [],
             axisLabel: {
               rotate: 45
@@ -403,26 +1053,384 @@ export default {
             containLabel: true
           }
         });
+        setTimeout(() => {
+          this.psnrChartInstance.resize();
+        }, 100);
+      }
+      
+      // 初始化 SSIM
+      const ssimChartEl = this.$refs.ssimChart;
+      if (ssimChartEl) {
+        this.ssimChartInstance = echarts.init(ssimChartEl);
+        this.ssimChartInstance.setOption({
+          tooltip: {
+            trigger: 'axis',
+            formatter: '{b}: @{c}'
+          },
+          xAxis: {
+            type: 'category',
+            name: '',
+            data: [],
+            axisLabel: {
+              rotate: 45
+            }
+          },
+          yAxis: {
+            type: 'value',
+            name: 'SSIM',
+            min: 0,
+            max: 1
+          },
+          series: [{
+            data: [],
+            type: 'line',
+            smooth: true,
+            lineStyle: {
+              color: '#10b981',
+              width: 2
+            },
+            itemStyle: {
+              color: '#10b981'
+            },
+            areaStyle: {
+              color: {
+                type: 'linear',
+                x: 0,
+                y: 0,
+                x2: 0,
+                y2: 1,
+                colorStops: [
+                  { offset: 0, color: 'rgba(16, 185, 129, 0.3)' },
+                  { offset: 1, color: 'rgba(16, 185, 129, 0.05)' }
+                ]
+              }
+            }
+          }],
+          grid: {
+            left: '10%',
+            right: '5%',
+            bottom: '15%',
+            top: '5%',
+            containLabel: true
+          }
+        });
+        setTimeout(() => {
+          this.ssimChartInstance.resize();
+        }, 100);
+      }
+        
+      // 初始化 Eval L1
+      const evalL1ChartEl = this.$refs.evalL1Chart;
+      if (evalL1ChartEl) {
+        this.evalL1ChartInstance = echarts.init(evalL1ChartEl);
+        this.evalL1ChartInstance.setOption({
+          tooltip: {
+            trigger: 'axis',
+            formatter: '{b}: @{c}'
+          },
+          xAxis: {
+            type: 'category',
+            name: '',
+            data: [],
+            axisLabel: {
+              rotate: 45
+            }
+          },
+          yAxis: {
+            type: 'value',
+            name: 'L1',
+            min: 0
+          },
+          series: [{
+            data: [],
+            type: 'line',
+            smooth: true,
+            lineStyle: {
+              color: '#f59e0b',
+              width: 2
+            },
+            itemStyle: {
+              color: '#f59e0b'
+            },
+            areaStyle: {
+              color: {
+                type: 'linear',
+                x: 0,
+                y: 0,
+                x2: 0,
+                y2: 1,
+                colorStops: [
+                  { offset: 0, color: 'rgba(245, 158, 11, 0.3)' },
+                  { offset: 1, color: 'rgba(245, 158, 11, 0.05)' }
+                ]
+              }
+            }
+          }],
+          grid: {
+            left: '10%',
+            right: '5%',
+            bottom: '15%',
+            top: '5%',
+            containLabel: true
+          }
+        });
+        setTimeout(() => {
+          this.evalL1ChartInstance.resize();
+        }, 100);
       }
     },
     
     setupIPCListeners() {
-      // 监听训练输出
       window.electronAPI?.onTrainingOutput((data) => {
-        this.handleTrainingOutput(data);
+        if (this.currentProjectId) {
+          console.log('[训练输出] 收到输出，当前 projectId:', this.currentProjectId);
+          this.handleTrainingOutput(data);
+        } else {
+          console.log('[训练输出] 无 currentProjectId，忽略输出');
+        }
       });
       
       // 监听烘焙输出
       window.electronAPI?.onBakingOutput((data) => {
-        this.handleBakingOutput(data);
+        if (this.currentProjectId) {
+          console.log('[烘焙输出] 收到输出，当前 projectId:', this.currentProjectId);
+          this.handleBakingOutput(data);
+        } else {
+          console.log('[烘焙输出] 无 currentProjectId，忽略输出');
+        }
       });
+      window.electronAPI?.onConversionOutput((data) => {
+        this.handleConversionOutput(data);
+      });
+      window.electronAPI?.onConversionClose((data) => {
+        this.handleConversionClose(data);
+      });
+    
+      setInterval(() => {
+        if (this.isTraining && this.modelPath) {
+          console.log('[定时任务] 尝试更新预览图片...');
+          this.updatePreviewImage();
+        }
+      }, 3000);
+    },
+    
+    debounceSave(func, wait) {
+      let timeout;
+      return function(...args) {
+        clearTimeout(timeout);
+        timeout = setTimeout(() => func.apply(this, args), wait);
+      };
+    },
+    
+    // 保存项目配置
+    async saveProjectConfig() {
+      if (!this.currentProjectId) {
+        console.log('[保存项目] 无 projectId，跳过保存');
+        return;
+      }
+      if (this.isTraining || this.isBaking) {
+        console.warn('[保存项目] 训练进行中，禁止调用 saveProjectConfig');
+        console.warn('[保存项目] 动态数据应由后端通过 TRAINING_STATE_UPDATE 自动更新');
+        return;
+      }
+      
+      try {
+        const config = {
+          projectName: String(this.projectName || ''),
+          outputPath: String(this.modelPath || ''),
+          sourcePath: String(this.sourcePath || ''),
+          iterations: Number(this.iterations || 30000),
+          resolution: Number(this.resolution || 1),
+          evalMode: Boolean(this.evalMode),
+          gamma: Boolean(this.gamma),
+          indirect: Boolean(this.indirect),
+          bound: Number(this.bound || 1.5),
+          occluRes: Number(this.occluRes || 128),
+          occlusion: Number(this.occlusion || 0.8),
+          checkpoint: this.checkpoint ? String(this.checkpoint) : null,
+        };
+        
+        console.log('[保存项目] 准备保存用户配置:', {
+          checkpoint: config.checkpoint,
+          gamma: config.gamma,
+          indirect: config.indirect,
+          resolution: config.resolution,
+          evalMode: config.evalMode,
+          bound: config.bound,
+          occluRes: config.occluRes,
+          occlusion: config.occlusion
+        });
+        console.log('[保存项目] 注意：动态数据（loss、psnr、ssim、iteration 等）将由后端自动更新');
+        
+        console.log('[保存项目] UI 当前值:', {
+          this_checkpoint: this.checkpoint,
+          this_gamma: this.gamma,
+          this_indirect: this.indirect,
+          this_resolution: this.resolution,
+          this_evalMode: this.evalMode
+        });
+        
+        const result = await window.electronAPI?.updateProjectConfig(
+          this.currentProjectId, 
+          config
+        );
+        
+        if (result?.success) {
+          console.log(`[保存项目] 已保存 ${this.currentProjectId}`);
+        } else {
+          console.error('[保存项目] 保存失败:', result?.error);
+          console.error('[保存项目] 配置数据:', {
+            projectId: this.currentProjectId,
+            checkpoint: this.checkpoint,
+            gamma: this.gamma,
+            indirect: this.indirect
+          });
+          // 错误提示
+          let errorMsg = '项目配置保存失败';
+          if (result?.error?.includes('权限') || result?.error?.includes('EACCES')) {
+            errorMsg += ' - 请检查文件权限或关闭占用该文件的程序';
+          } else if (result?.error?.includes('不存在') || result?.error?.includes('ENOENT')) {
+            errorMsg += ' - 项目目录不存在，将自动创建';
+          } else {
+            errorMsg += `: ${result?.error}`;
+          }
+          alert(errorMsg);
+        }
+      } catch (error) {
+        console.error('[保存项目] 异常:', error);
+        alert('项目配置保存失败：' + error.message);
+      }
+    },
+    
+    // 更新项目状态
+    async updateProjectStatus(newStatus) {
+      if (!this.currentProjectId) {
+        console.log('[更新项目状态] 无 projectId，跳过更新');
+        return;
+      }
+      
+      try {
+        console.log(`[更新项目状态] 将 ${this.currentProjectId} 的状态更新为：${newStatus}`);
+        
+        const result = await window.electronAPI?.updateProjectConfig(
+          this.currentProjectId,
+          { status: newStatus }
+        );
+        
+        if (result?.success) {
+          console.log(`[更新项目状态] 状态已更新为：${newStatus}`);
+        } else {
+          console.error('[更新项目状态] 更新失败:', result?.error);
+        }
+      } catch (error) {
+        console.error('[更新项目状态] 异常:', error);
+      }
+    },
+    
+    async triggerAutoSave() {
+      if (this.isLoadingProject) {
+        console.log('[triggerAutoSave] 项目加载中，跳过保存');
+        return;
+      }
+      
+      try {
+        if (!this.currentProjectId) {
+          console.log('[triggerAutoSave] 项目不存在，创建新项目...');
+          await this.createProjectIfNeeded();
+        }
+        
+        if (this.currentProjectId) {
+          await this.saveProjectConfig();
+          console.log('[triggerAutoSave] 配置已保存');
+        }
+      } catch (error) {
+        console.error('[triggerAutoSave] 失败:', error);
+      }
+    },
+    async markTrainingAsCompleted() {
+      if (!this.currentProjectId) {
+        console.log('[训练完成] 无 projectId，无法更新状态');
+        return;
+      }
+      
+      try {
+        console.log(`[训练完成] 准备检查项目 ${this.currentProjectId} 的完成状态...`);
+        const result = await window.electronAPI?.checkTrainingCompletion(this.currentProjectId);
+        
+        if (result?.success && result.completed) {
+          console.log(`[训练完成] 项目状态已更新为 completed`);
+          this.addLog('训练已完成！检测到 chkpnt40000.pth 文件', 'success');
+          
+          // 更新前端状态
+          this.isTraining = false;
+          this.trainingStatus = 'completed';
+          
+          // 通知其他组件
+          if (typeof window.electronAPI?.onTrainingCompleted === 'function') {
+            window.electronAPI.onTrainingCompleted((data) => {
+              console.log('[训练完成] 收到完成通知:', data);
+            });
+          }
+        } else {
+          console.log('[训练完成] 文件检测失败或未完成');
+        }
+      } catch (error) {
+        console.error('[训练完成] 更新状态失败:', error);
+      }
+    },
+    
+    // 创建新项目
+    async createProjectIfNeeded() {
+      if (!this.modelPath || !this.sourcePath) {
+        console.log('[createProjectIfNeeded] 缺少必要路径，跳过创建');
+        return;
+      }
+      
+      try {
+        const config = {
+          projectName: this.projectName.trim() || null,
+          outputPath: this.modelPath,
+          sourcePath: this.sourcePath,
+          stage: 'stage1',
+          totalIterations: this.iterations,
+          resolution: this.resolution,
+          evalMode: this.evalMode,
+          gamma: this.gamma,
+          indirect: this.indirect,
+          bound: this.bound,
+          occluRes: this.occluRes,
+          occlusion: this.occlusion,
+          checkpoint: this.checkpoint || null
+        };
+        
+        console.log('[createProjectIfNeeded] 创建项目配置:', config);
+        
+        const result = await window.electronAPI?.createProject(config);
+        
+        if (result?.success) {
+          this.currentProjectId = result.projectId;
+          console.log('[createProjectIfNeeded] 项目已创建:', result.projectId);
+          
+          // 保存参数
+          await this.saveProjectConfig();
+        } else {
+          console.error('[createProjectIfNeeded] 创建失败:', result?.error);
+        }
+      } catch (error) {
+        console.error('[createProjectIfNeeded] 异常:', error);
+      }
     },
     
     handleTrainingOutput(data) {
+      if (!this.currentProjectId) {
+        console.log('[训练输出] 无 currentProjectId，忽略输出');
+        return;
+      }
+      
       const timestamp = new Date().toLocaleTimeString();
       
       if (data.type === 'stdout' || data.type === 'stderr') {
-        // 解析训练输出，提取关键信息
+        // 解析训练输出
         const lines = data.data.split('\n');
         lines.forEach(line => {
           if (line.trim()) {
@@ -431,44 +1439,197 @@ export default {
               message: line,
               type: data.type === 'stderr' ? 'error' : 'info'
             });
-            
-            // 尝试解析 iteration 和 loss
-            const lossMatch = line.match(/Loss:\s*([0-9.]+)/);
-            if (lossMatch) {
-              const loss = parseFloat(lossMatch[1]);
-              this.updateChartData(this.currentIteration, loss);
+            const checkpointMatch = line.match(/Saved checkpoint at iteration (\d+) to:\s*(.+\.pth)/);
+            if (checkpointMatch) {
+              const iteration = parseInt(checkpointMatch[1]);
+              const checkpointPath = checkpointMatch[2].trim();
+              console.log(`[Checkpoint] 检测到检查点保存：iter=${iteration}, path=${checkpointPath}`);
+              
+              if (checkpointPath.includes('chkpnt40000.pth')) {
+                console.log('[Checkpoint] 检测到最终检查点，准备更新项目状态...');
+                this.markTrainingAsCompleted();
+              }
+              return;
             }
             
-            // 尝试解析 PSNR
-            const psnrMatch = line.match(/PSNR\s*([0-9.]+)/);
-            if (psnrMatch) {
-              const psnr = parseFloat(psnrMatch[1]);
-              this.updatePsnrData(this.currentIteration, psnr);
-            }
-            
-            // 尝试解析 iteration
-            const iterMatch = line.match(/\[ITER\s*(\d+)\]/);
+            // 解析 iteration 标记
+            const iterMatch = line.match(/===\s*TRAINING_ITERATION\s+(\d+)\s*===/);
             if (iterMatch) {
               this.currentIteration = parseInt(iterMatch[1]);
+              console.log('[解析] 检测到迭代开始:', this.currentIteration);
+              return;
+            }
+            
+            // 解析 Loss 值
+            const lossMatch = line.match(/LOSS_VALUE:\s*([0-9.]+)/);
+            if (lossMatch && this.currentIteration > 0) {
+              const loss = parseFloat(lossMatch[1]);
+              console.log(`[解析] Loss=${loss}, iteration=${this.currentIteration}`);
+              this.updateChartData(this.currentIteration, loss);
+              return;
+            }
+            
+            // 解析 PSNR 值
+            const psnrMatch = line.match(/PSNR_VALUE:\s*([0-9.]+)/);
+            if (psnrMatch && this.currentIteration > 0) {
+              const psnr = parseFloat(psnrMatch[1]);
+              console.log(`[解析] PSNR=${psnr}, iteration=${this.currentIteration}`);
+              this.updatePsnrData(this.currentIteration, psnr);
+              return;
+            }
+            
+            // 解析评估指标 (TEST)
+            const evalTestL1Match = line.match(/EVAL_TEST_L1:\s*([0-9.]+)/);
+            const evalTestPsnrMatch = line.match(/EVAL_TEST_PSNR:\s*([0-9.]+)/);
+            const evalTestSsimMatch = line.match(/EVAL_TEST_SSIM:\s*([0-9.]+)/);
+            if ((evalTestL1Match || evalTestPsnrMatch || evalTestSsimMatch) && this.currentIteration > 0) {
+              console.log('[解析] 检测到 TEST 评估指标（每 1000 次迭代）');
+              
+              // 更新 Eval L1
+              if (evalTestL1Match) {
+                const evalL1 = parseFloat(evalTestL1Match[1]);
+                console.log(`[Eval L1 - TEST] 更新 - iter: ${this.currentIteration}, value: ${evalL1}`);
+                this.updateEvalL1Data(this.currentIteration, evalL1);
+              }
+              
+              // 更新 PSNR 和 SSIM
+              if (evalTestPsnrMatch) {
+                const psnr = parseFloat(evalTestPsnrMatch[1]);
+                console.log(`[PSNR - TEST] 更新 - iter: ${this.currentIteration}, value: ${psnr}`);
+                this.updatePsnrData(this.currentIteration, psnr);
+              }
+              
+              if (evalTestSsimMatch) {
+                const ssim = parseFloat(evalTestSsimMatch[1]);
+                console.log(`[SSIM - TEST] 更新 - iter: ${this.currentIteration}, value: ${ssim}`);
+                this.updateSsimData(this.currentIteration, ssim);
+              }
+              
+              return;
+            }
+            
+            // 解析评估指标 (TRAIN)
+            const evalTrainL1Match = line.match(/EVAL_TRAIN_L1:\s*([0-9.]+)/);
+            const evalTrainPsnrMatch = line.match(/EVAL_TRAIN_PSNR:\s*([0-9.]+)/);
+            const evalTrainSsimMatch = line.match(/EVAL_TRAIN_SSIM:\s*([0-9.]+)/);
+            if ((evalTrainL1Match || evalTrainPsnrMatch || evalTrainSsimMatch) && this.currentIteration > 0) {
+              console.log('[解析] 检测到 TRAIN 评估指标（每 1000 次迭代）');
+              
+              // 更新 Eval L1
+              if (evalTrainL1Match) {
+                const evalL1 = parseFloat(evalTrainL1Match[1]);
+                console.log(`[Eval L1 - TRAIN] 更新 - iter: ${this.currentIteration}, value: ${evalL1}`);
+                this.updateEvalL1Data(this.currentIteration, evalL1);
+              }
+              
+              // 更新 PSNR 和 SSIM
+              if (evalTrainPsnrMatch) {
+                const psnr = parseFloat(evalTrainPsnrMatch[1]);
+                console.log(`[PSNR - TRAIN] 更新 - iter: ${this.currentIteration}, value: ${psnr}`);
+                this.updatePsnrData(this.currentIteration, psnr);
+              }
+              
+              if (evalTrainSsimMatch) {
+                const ssim = parseFloat(evalTrainSsimMatch[1]);
+                console.log(`[SSIM - TRAIN] 更新 - iter: ${this.currentIteration}, value: ${ssim}`);
+                this.updateSsimData(this.currentIteration, ssim);
+              }
+              
+              return;
+            }
+            
+            // 解析实时训练中的 PSNR 和 SSIM 值
+            const evalMatch = line.match(/\[ITER\s+(\d+)\]\s+Evaluating\s+\w+:\s+.*PSNR:\s*([0-9.]+).*SSIM\s+([0-9.]+)/);
+            if (evalMatch) {
+              const iter = parseInt(evalMatch[1]);
+              const psnr = parseFloat(evalMatch[2]);
+              const ssim = parseFloat(evalMatch[3]);
+              console.log(`[解析] 从评估行解析 PSNR=${psnr}, SSIM=${ssim}, iteration=${iter}`);
+              this.updatePsnrData(iter, psnr);
+              this.updateSsimData(iter, ssim);
+              return;
+            }
+            
+            // 4. 解析预览图保存路径
+            const previewMatch = line.match(/PREVIEW_SAVED:\s*(.+)/);
+            if (previewMatch) {
+              const previewPath = previewMatch[1].trim();
+              console.log('[解析] 预览图已保存:', previewPath);
+              console.log('[解析] 模型输出目录:', this.modelPath);
+              setTimeout(() => {
+                console.log('[定时任务] 检测到 PREVIEW_SAVED，立即更新预览图...');
+                this.updatePreviewImage();
+              }, 300);
+              return;
+            }
+          
+            const oldIterMatch = line.match(/\[ITER\s+(\d+)\]/);
+            if (oldIterMatch) {
+              this.currentIteration = parseInt(oldIterMatch[1]);
+              console.log('[解析][旧格式] iteration:', this.currentIteration);
             }
           }
         });
         
-        // 滚动到底部
+        // 滚动日志底部
         this.$nextTick(() => {
           if (this.$refs.logContainer) {
             this.$refs.logContainer.scrollTop = this.$refs.logContainer.scrollHeight;
           }
         });
+        if (this.bakingLogs.length % 10 === 0) {
+          this.triggerAutoSave();
+        }
+      } 
+      else if (data.type === 'eval-update') {
+        // 处理评估更新
+        console.log('[处理评估更新] 收到数据:', data.data);
+              
+        if (data.data.evalL1 !== undefined && data.data.evalL1 !== null) {
+          console.log(`[Eval L1] 更新 - iter: ${data.data.iter}, value: ${data.data.evalL1}, type: ${data.data.evalL1Type}`);
+          this.updateEvalL1Data(data.data.iter, data.data.evalL1);
+        }
       } else if (data.type === 'close') {
         this.isTraining = false;
-        this.addLog(`训练进程结束，退出代码：${data.code}`, 'warning');
+        
+        // 判断是用户主动终止还是正常完成
+        if (this.userCancelled) {
+          this.trainingStatus = 'error';
+          this.showRetryDeleteButtons = true;
+          this.addLog(`训练已被用户终止，退出代码：${data.code}`, 'warning');
+          this.addLog('训练已停止，可以选择重试或删除项目', 'warning');
+          this.userCancelled = false;
+          this.updateProjectStatus('error');
+        } else if (data.code === 0) {
+          // 训练正常完成
+          this.trainingStatus = 'completed';
+          this.addLog(`训练进程正常结束，退出代码：${data.code}`, 'success');
+          
+          // 检查是否是 Stage2 完成
+          if (this.stage === 'stage2' || (this.checkpoint && this.checkpoint.endsWith('.pth'))) {
+            console.log('[训练完成] 检测到 Stage2 完成，三个阶段全部完成');
+            this.showCompleteButtons = true;
+            this.addLog('训练已全部完成，可以选择保存到项目列表或删除', 'success');
+          }
+        } else {
+          // 状态设为 error
+          this.trainingStatus = 'error';
+          this.showRetryDeleteButtons = true;
+          this.addLog(`训练进程异常结束，退出代码：${data.code}`, 'error');
+          this.addLog('训练遇到错误已停止，可以选择重试或删除项目', 'warning');
+          this.updateProjectStatus('error');
+        }
       }
     },
     
     handleBakingOutput(data) {
-      const timestamp = new Date().toLocaleTimeString();
+      if (!this.currentProjectId) {
+        console.log('[烘焙输出] 无 currentProjectId，忽略输出');
+        return;
+      }
       
+      const timestamp = new Date().toLocaleTimeString();
+          
       if (data.type === 'stdout' || data.type === 'stderr') {
         // 解析烘焙输出
         const lines = data.data.split('\n');
@@ -479,65 +1640,245 @@ export default {
               message: line,
               type: data.type === 'stderr' ? 'error' : 'info'
             });
-            
-            // 尝试解析进度
+                
+            // 解析进度
             const progressMatch = line.match(/(\d+)%/);
             if (progressMatch) {
               this.bakingProgress = parseInt(progressMatch[1]);
+              this.triggerAutoSave();
             }
           }
         });
-        
+            
         // 滚动到底部
         this.$nextTick(() => {
           if (this.$refs.bakingLogContainer) {
             this.$refs.bakingLogContainer.scrollTop = this.$refs.bakingLogContainer.scrollHeight;
           }
         });
+            
+        // 保存日志
+        if (this.bakingLogs.length % 10 === 0) {
+          this.triggerAutoSave();
+        }
       } else if (data.type === 'close') {
         this.isBaking = false;
         this.bakingStatus = data.code === 0 ? 'completed' : 'error';
         this.addBakingLog(`烘焙进程结束，退出代码：${data.code}`, 'warning');
+        if (data.code !== 0) {
+          this.showRetryDeleteButtons = true;
+          this.addLog('烘焙遇到错误已停止，可以选择重试或删除项目', 'warning');
+          // 更新项目状态为 error
+          this.updateProjectStatus('error');
+        }
+        this.saveProjectConfig();
+      }
+    },
+    
+    handleConversionOutput(data) {
+      if (data.type === 'stdout' || data.type === 'stderr') {
+        // 分割多行输出
+        const lines = data.data.split('\n');
+        lines.forEach(line => {
+          if (line.trim()) {
+            this.addConversionLog(line, data.type === 'stderr' ? 'error' : 'info');
+          }
+        });
+        this.scrollToConversionLogBottom();
+      }
+    },
+    
+    handleConversionClose(data) {
+      console.log('转换进程退出，代码:', data.code);
+      this.isConverting = false;
+      this.isStopping = false;
+      
+      if (data.code === 0) {
+        this.needsConversion = false;
+        this.addConversionLog('数据集转换完成', 'success');
+        this.addLog('数据集转换成功完成', 'success');
+        alert('数据集转换完成，可以开始训练了！');
+      } else {
+        this.addConversionLog(`转换失败，退出代码：${data.code}`, 'error');
+        this.addLog(`数据集转换失败：退出代码 ${data.code}`, 'error');
+        alert(`转换失败，退出代码：${data.code}`);
       }
     },
     
     updateChartData(iteration, loss) {
-      if (!this.lossChartInstance) return;
+      if (!this.lossChartInstance) {
+        console.warn('Loss 图表实例未初始化');
+        return;
+      }
+      const iterNum = parseInt(iteration) || 0;
+      const lossValue = parseFloat(loss);
       
-      // 添加数据点
-      const option = this.lossChartInstance.getOption();
-      const xData = option.xAxis[0].data || [];
-      const seriesData = option.series[0].data || [];
-      
-      // 避免重复
-      if (!xData.includes(iteration.toString())) {
-        xData.push(iteration.toString());
-        seriesData.push(loss);
+      if (isNaN(lossValue)) {
+        console.warn('Loss 值无效:', loss);
+        return;
+      }
+      try {
+        // 添加数据点
+        const option = this.lossChartInstance.getOption();
+        const xData = option.xAxis && option.xAxis[0] ? (option.xAxis[0].data || []) : [];
+        const seriesData = option.series && option.series[0] ? (option.series[0].data || []) : [];
         
-        this.lossChartInstance.setOption({
-          xAxis: { data: xData },
-          series: [{ data: seriesData }]
-        });
+        // 避免重复
+        const iterStr = iterNum.toString();
+        if (!xData.includes(iterStr)) {
+          xData.push(iterStr);
+          seriesData.push(lossValue);
+          
+          this.lossChartInstance.setOption({
+            xAxis: { data: xData },
+            series: [{ data: seriesData }]
+          });
+        }
+      } catch (error) {
+        console.error('更新 Loss 图表失败:', error);
       }
     },
     
     updatePsnrData(iteration, psnr) {
-      if (!this.psnrChartInstance) return;
+      if (!this.psnrChartInstance) {
+        console.warn('PSNR 图表实例未初始化');
+        return;
+      }
+      const iterNum = parseInt(iteration) || 0;
+      const psnrValue = parseFloat(psnr);
       
-      // 添加数据点
-      const option = this.psnrChartInstance.getOption();
-      const xData = option.xAxis[0].data || [];
-      const seriesData = option.series[0].data || [];
+      if (isNaN(psnrValue)) {
+        console.warn('PSNR 值无效:', psnr);
+        return;
+      }
+      try {
+        // 添加数据点
+        const option = this.psnrChartInstance.getOption();
+        const xData = option.xAxis && option.xAxis[0] ? (option.xAxis[0].data || []) : [];
+        const seriesData = option.series && option.series[0] ? (option.series[0].data || []) : [];
+        const iterStr = iterNum.toString();
+        if (!xData.includes(iterStr)) {
+          xData.push(iterStr);
+          seriesData.push(psnrValue);
+          
+          this.psnrChartInstance.setOption({
+            xAxis: { data: xData },
+            series: [{ data: seriesData }]
+          });
+        }
+      } catch (error) {
+        console.error('更新 PSNR 图表失败:', error);
+      }
+    },
+    
+    updateSsimData(iteration, ssim) {
+      if (!this.ssimChartInstance) {
+        console.warn('SSIM 图表实例未初始化');
+        return;
+      }
+      const iterNum = parseInt(iteration) || 0;
+      const ssimValue = parseFloat(ssim);
       
-      // 避免重复
-      if (!xData.includes(iteration.toString())) {
-        xData.push(iteration.toString());
-        seriesData.push(psnr);
+      if (isNaN(ssimValue)) {
+        console.warn('SSIM 值无效:', ssim);
+        return;
+      }
+      try {
+        // 添加数据点
+        const option = this.ssimChartInstance.getOption();
+        const xData = option.xAxis && option.xAxis[0] ? (option.xAxis[0].data || []) : [];
+        const seriesData = option.series && option.series[0] ? (option.series[0].data || []) : [];
+        const iterStr = iterNum.toString();
+        if (!xData.includes(iterStr)) {
+          xData.push(iterStr);
+          seriesData.push(ssimValue);
+          
+          this.ssimChartInstance.setOption({
+            xAxis: { data: xData },
+            series: [{ data: seriesData }]
+          });
+        }
+      } catch (error) {
+        console.error('更新 SSIM 图表失败:', error);
+      }
+    },
+    
+    updateEvalL1Data(iteration, evalL1) {
+      if (!this.evalL1ChartInstance) {
+        console.warn('Eval L1 图表实例未初始化');
+        return;
+      }
+      const iterNum = parseInt(iteration) || 0;
+      const evalL1Value = parseFloat(evalL1);
+      
+      if (isNaN(evalL1Value)) {
+        console.warn('Eval L1 值无效:', evalL1);
+        return;
+      }
+      try {
+        // 添加数据点
+        const option = this.evalL1ChartInstance.getOption();
+        const xData = option.xAxis && option.xAxis[0] ? (option.xAxis[0].data || []) : [];
+        const seriesData = option.series && option.series[0] ? (option.series[0].data || []) : [];
+        const iterStr = iterNum.toString();
+        if (!xData.includes(iterStr)) {
+          xData.push(iterStr);
+          seriesData.push(evalL1Value);
+          
+          this.evalL1ChartInstance.setOption({
+            xAxis: { data: xData },
+            series: [{ data: seriesData }]
+          });
+        }
+      } catch (error) {
+        console.error('更新 Eval L1 图表失败:', error);
+      }
+    },
+    
+    async updatePreviewImage() {
+      if (!this.modelPath) {
+        console.log('[预览] 模型路径为空，跳过更新');
+        return;
+      }
+      
+      console.log('[预览] 开始检查渲染图像，模型路径:', this.modelPath);
+      
+      try {
+        const result = await window.electronAPI?.getLatestRenderedImage(this.modelPath);
         
-        this.psnrChartInstance.setOption({
-          xAxis: { data: xData },
-          series: [{ data: seriesData }]
-        });
+        if (result && result.success && result.imageBase64) {
+          // 使用 Base64 数据
+          const imageUrl = result.imageBase64;
+          
+          console.log('[预览] 找到最新渲染图:', result.imagePath);
+          console.log('[预览] Base64 图片大小:', (imageUrl.length / 1024).toFixed(2), 'KB');
+          console.log('[预览] Base64 前缀:', imageUrl.substring(0, 50));
+          
+          // 创建 Image 对象预加载，确保图片可以正常显示
+          const img = new Image();
+          img.onload = () => {
+            console.log('[预览] 图片预加载成功，准备更新界面');
+            console.log('[预览] 当前 iteration:', this.currentIteration);
+            this.previewImage = imageUrl;
+            
+            console.log('[预览] 界面已更新，previewImage 已设置');
+          };
+          img.onerror = (err) => {
+            console.error('[预览] 图片预加载失败:', err);
+            console.error('[预览] Base64 数据:', imageUrl.substring(0, 50) + '...');
+            this.previewImage = imageUrl;
+          };
+          img.src = imageUrl;
+        } else {
+          console.log('[预览] 未找到渲染图像（可能是训练初期）');
+          if (result?.error) {
+            console.log('[预览] 错误信息:', result.error);
+          }
+          this.previewImage = null;
+        }
+      } catch (error) {
+        console.error('[预览] 更新失败:', error);
+        console.error('[预览] 错误堆栈:', error.stack);
       }
     },
     
@@ -547,8 +1888,6 @@ export default {
         message,
         type
       });
-      
-      // 保持日志数量在合理范围内
       if (this.logs.length > 1000) {
         this.logs = this.logs.slice(-500);
       }
@@ -566,8 +1905,6 @@ export default {
         message,
         type
       });
-      
-      // 保持日志数量在合理范围内
       if (this.bakingLogs.length > 500) {
         this.bakingLogs = this.bakingLogs.slice(-200);
       }
@@ -585,22 +1922,6 @@ export default {
         return;
       }
       
-      // 启动前再次验证环境
-      try {
-        const envCheck = await window.electronAPI?.checkEnvironment();
-        if (!envCheck?.success || !envCheck?.valid) {
-          const errorMsg = envCheck?.error || 'Python 环境未就绪';
-          alert(`环境检查失败：${errorMsg}\n\n请先安装所需依赖后再试。`);
-          this.$router.push('/environment');
-          return;
-        }
-      } catch (error) {
-        console.error('环境检查异常:', error);
-        alert('环境检查失败，请先配置 Python 环境。');
-        this.$router.push('/environment');
-        return;
-      }
-      
       try {
         this.isTraining = true;
         this.currentIteration = 0;
@@ -609,15 +1930,19 @@ export default {
         this.logs = [];
         this.bakingStatus = 'idle';
         
+        const finalProjectName = this.projectName.trim() || this.generateDefaultProjectName();
+        
         const config = {
           modelPath: this.modelPath,
           sourcePath: this.sourcePath,
           iterations: this.iterations,
           eval: this.evalMode,
           resolution: this.resolution,
+          imageSubdir: this.imageSubdir,
           gamma: false,
           indirect: false,
-          checkpoint: null
+          checkpoint: null,
+          projectName: finalProjectName
         };
         
         const result = await window.electronAPI?.startTraining(config);
@@ -626,7 +1951,7 @@ export default {
           throw new Error(result?.error || '启动训练失败');
         }
         
-        this.addLog('Stage1 训练已启动', 'success');
+        this.addLog(`Stage1 训练已启动 - 项目：${finalProjectName}`, 'success');
       } catch (error) {
         console.error('启动 Stage1 失败:', error);
         this.addLog(`启动 Stage1 失败：${error.message}`, 'error');
@@ -645,34 +1970,26 @@ export default {
         return;
       }
       
-      // 启动前验证环境
-      try {
-        const envCheck = await window.electronAPI?.checkEnvironment();
-        if (!envCheck?.success || !envCheck?.valid) {
-          const errorMsg = envCheck?.error || 'Python 环境未就绪';
-          alert(`环境检查失败：${errorMsg}\n\n请先安装所需依赖后再试。`);
-          this.$router.push('/environment');
-          return;
-        }
-      } catch (error) {
-        console.error('环境检查异常:', error);
-        alert('环境检查失败，请先配置 Python 环境。');
-        this.$router.push('/environment');
-        return;
-      }
-      
       try {
         this.isBaking = true;
         this.bakingStatus = 'running';
         this.bakingProgress = 0;
         this.bakingLogs = [];
+
+        if (this.currentProjectId) {
+          await window.electronAPI?.updateProjectStage(this.currentProjectId, 'baking');
+          console.log(`[Baking] 已更新项目阶段为 baking, projectId: ${this.currentProjectId}`);
+          await this.saveProjectConfig();
+          console.log('[Baking] 初始状态已保存');
+        }
         
         const config = {
           modelPath: this.modelPath,
           checkpoint: this.checkpoint,
           bound: this.bound,
           occluRes: this.occluRes,
-          occlusion: this.occlusion
+          occlusion: this.occlusion,
+          projectId: this.currentProjectId
         };
         
         const result = await window.electronAPI?.startBaking(config);
@@ -690,6 +2007,328 @@ export default {
       }
     },
     
+    async startFullTraining() {
+      // 检查是否正在训练中
+      if (this.isTraining || this.isBaking) {
+        alert('训练正在进行中！');
+        return;
+      }
+      
+      try {
+        this.userCancelled = false;
+        
+        this.addLog('========================================', 'info');
+        this.addLog('开始完整训练流程 (Stage1 → Baking → Stage2)', 'success');
+        this.addLog('========================================', 'info');
+        
+        if (this.saveDebounceTimer) {
+          clearTimeout(this.saveDebounceTimer);
+          this.saveDebounceTimer = null;
+        }
+
+        if (!this.currentProjectId) {
+          await this.createProjectIfNeeded();
+        }
+        
+        if (this.currentProjectId) {
+          await this.saveProjectConfig();
+          console.log('[完整流程] 初始状态已保存，gamma:', this.gamma, ', indirect:', this.indirect, ', checkpoint:', this.checkpoint);
+        }
+        
+        const stageInfo = await this.detectTrainingStage();
+        
+        console.log('[智能判断] 检测结果:', stageInfo);
+        
+        if (stageInfo.shouldStartStage2Directly) {
+          // 直接开始 Stage2
+          this.addLog('检测到 chkpnt30000.pth 和 occlusion_volumes.pth 文件，跳过 Stage1 和 Baking', 'success');
+          this.addLog('【阶段 3/3】开始 Stage2 优化训练...', 'info');
+          await this.executeStage2();
+          await this.waitForStageCompletion('training');
+        } else if (stageInfo.shouldStartBakingDirectly) {
+          // 直接开始 Baking
+          this.addLog('检测到 chkpnt30000.pth 文件，跳过 Stage1', 'success');
+          this.addLog('【阶段 2/3】开始 Baking 烘焙...', 'info');
+          await this.executeBaking();
+          await this.waitForStageCompletion('baking');
+          this.addLog('【阶段 2/3】✓ Baking 完成', 'success');
+          
+          // 继续执行 Stage2
+          this.addLog('【阶段 3/3】开始 Stage2 优化训练...', 'info');
+          await this.executeStage2();
+          await this.waitForStageCompletion('training');
+        } else if (this.bakingStatus === 'error' || this.trainingStatus === 'error') {
+          // 之前出错了，询问用户如何处理
+          this.addLog('检测到之前的训练发生错误', 'warning');
+          this.showRetryDeleteButtons = true;
+          return;  // 不自动继续，让用户手动选择
+        } else {
+          // 从头开始完整流程
+          await this.startFullTrainingFromBegin();
+        }
+        
+      } catch (error) {
+        console.error('完整训练流程失败:', error);
+        this.addLog(`训练流程中断：${error.message}`, 'error');
+        this.addLog('请检查日志了解详情，修复问题后可继续执行剩余阶段', 'warning');
+        this.isTraining = false;
+        this.isBaking = false;
+      }
+    },
+    
+    // 检测输出目录中的文件
+    async detectTrainingStage() {
+      try {
+        const checkpointPath = `${this.modelPath}/chkpnt30000.pth`;
+        const occlusionPath = `${this.modelPath}/occlusion_volumes.pth`;
+        const checkpointResult = await window.electronAPI?.checkFileExists(checkpointPath);
+        const occlusionResult = await window.electronAPI?.checkFileExists(occlusionPath);
+        
+        const hasCheckpoint = checkpointResult?.exists === true;
+        const hasOcclusion = occlusionResult?.exists === true;
+        
+        console.log('[文件检测]', {
+          checkpoint: checkpointPath,
+          hasCheckpoint,
+          occlusion: occlusionPath,
+          hasOcclusion
+        });
+        
+        // 判断逻辑
+        if (hasOcclusion) {
+          return {
+            shouldStartStage2Directly: true,
+            shouldStartBakingDirectly: false,
+            stage: 'stage2'
+          };
+        } else if (hasCheckpoint) {
+          return {
+            shouldStartStage2Directly: false,
+            shouldStartBakingDirectly: true,
+            stage: 'baking'
+          };
+        } else {
+          return {
+            shouldStartStage2Directly: false,
+            shouldStartBakingDirectly: false,
+            stage: 'stage1'
+          };
+        }
+      } catch (error) {
+        console.error('[文件检测] 失败:', error);
+        return {
+          shouldStartStage2Directly: false,
+          shouldStartBakingDirectly: false,
+          stage: 'stage1'
+        };
+      }
+    },
+    
+    async startFullTrainingFromBegin() {
+      this.addLog('【阶段 1/3】开始 Stage1 初始训练...', 'info');
+      await this.executeStage1();
+      
+      // 等待 Stage1 完成
+      await this.waitForStageCompletion('training');
+      
+      if (this.trainingStatus === 'error') {
+        throw new Error('Stage1 训练失败');
+      }
+      
+      // 更新检查点路径
+      const lastSlashIndex = this.modelPath.lastIndexOf('/');
+      const baseDir = this.modelPath.substring(0, lastSlashIndex);
+      this.checkpoint = `${baseDir}/chkpnt30000.pth`;
+      this.addLog(`【阶段 1/3】✓ Stage1 完成，检查点：${this.checkpoint}`, 'success');
+      
+      // checkpoint 变动后立即保存
+      if (this.currentProjectId) {
+        await this.saveProjectConfig();
+        console.log('[完整流程] ✓ checkpoint 已保存:', this.checkpoint);
+      }
+      
+      this.addLog('【阶段 2/3】开始 Baking 烘焙...', 'info');
+      await this.executeBaking();
+      
+      // 等待 Baking 完成
+      await this.waitForStageCompletion('baking');
+      this.addLog('【阶段 2/3】✓ Baking 完成', 'success');
+      this.addLog('【阶段 3/3】开始 Stage2 优化训练...', 'info');
+      await this.executeStage2();
+      
+      // 等待 Stage2 完成
+      await this.waitForStageCompletion('training');
+      
+      if (this.trainingStatus === 'error') {
+        throw new Error('Stage2 训练失败');
+      }
+      
+      this.addLog('【阶段 3/3】✓ Stage2 完成', 'success');
+      
+      this.addLog('========================================', 'success');
+      this.addLog('🎉 完整训练流程全部完成!', 'success');
+      this.addLog('========================================', 'success');
+    },
+    
+    async executeStage1() {
+      const finalProjectName = this.projectName.trim() || this.generateDefaultProjectName();
+      
+      const config = {
+        modelPath: this.modelPath,
+        sourcePath: this.sourcePath,
+        iterations: this.iterations,
+        eval: this.evalMode,
+        resolution: this.resolution,
+        imageSubdir: this.imageSubdir,
+        // Stage1 训练时使用固定参数
+        gamma: false,
+        indirect: false,
+        checkpoint: null,
+        projectName: finalProjectName,
+        userGamma: this.gamma,
+        userIndirect: this.indirect,
+        userCheckpoint: this.checkpoint,
+        userBound: this.bound,
+        userOccluRes: this.occluRes,
+        userOcclusion: this.occlusion
+      };
+      
+      const result = await window.electronAPI?.startTraining(config);
+      
+      if (!result?.success) {
+        throw new Error(result?.error || '启动 Stage1 失败');
+      }
+      
+      this.isTraining = true;
+      this.trainingStatus = 'running';
+      this.currentIteration = 0;
+      this.lossData = [];
+      this.psnrData = [];
+      this.logs = [];
+      this.bakingStatus = 'idle';
+      if (!this.$route.query.resumeProjectId && this.currentProjectId) {
+        console.log('[executeStage1] 检测到是新项目，准备刷新页面以显示监控界面...');
+        console.log('[executeStage1] 当前 projectId:', this.currentProjectId);
+        
+        await this.$router.replace({
+          path: '/train',
+          query: {
+            resumeProjectId: this.currentProjectId
+          }
+        });
+        
+        console.log('[executeStage1] ✓ 页面已刷新，现在将显示实时监控数据');
+      }
+      
+      // 更新项目阶段
+      if (this.currentProjectId) {
+        await window.electronAPI?.updateProjectStage(this.currentProjectId, 'training');
+        console.log(`[Stage1] 已更新项目阶段为 training, projectId: ${this.currentProjectId}`);
+      }
+      
+      this.addLog(`Stage1 训练已启动 - 项目：${finalProjectName}`, 'success');
+    },
+    
+    async executeBaking() {
+      if (!this.checkpoint) {
+        throw new Error('未指定检查点文件');
+      }
+      
+      const config = {
+        modelPath: this.modelPath,
+        checkpoint: this.checkpoint,
+        bound: this.bound,
+        occluRes: this.occluRes,
+        occlusion: this.occlusion,
+        projectId: this.currentProjectId
+      };
+      
+      const result = await window.electronAPI?.startBaking(config);
+      
+      if (!result?.success) {
+        throw new Error(result?.error || '启动 Baking 失败');
+      }
+      
+      this.isBaking = true;
+      this.bakingStatus = 'running';
+      this.bakingProgress = 0;
+      this.bakingLogs = [];
+      
+      if (this.currentProjectId) {
+        await window.electronAPI?.updateProjectStage(this.currentProjectId, 'baking');
+        await this.$nextTick();
+        await this.saveProjectConfig();
+        console.log('[Baking] 配置已保存，checkpoint:', this.checkpoint);
+      }
+      
+      this.addBakingLog('Baking 已启动', 'success');
+    },
+    
+    async executeStage2() {
+      const finalProjectName = this.projectName.trim() || this.generateDefaultProjectName();
+      
+      const config = {
+        modelPath: this.modelPath,
+        sourcePath: this.sourcePath,
+        iterations: 40000,
+        eval: this.evalMode,
+        resolution: this.resolution,
+        imageSubdir: this.imageSubdir,
+        gamma: this.gamma,
+        indirect: this.indirect,
+        checkpoint: this.checkpoint,
+        projectName: finalProjectName,
+        projectId: this.currentProjectId
+      };
+      
+      const result = await window.electronAPI?.startTraining(config);
+      
+      if (!result?.success) {
+        throw new Error(result?.error || '启动 Stage2 失败');
+      }
+      
+      this.isTraining = true;
+      this.trainingStatus = 'running';
+      this.currentIteration = 30000;
+      this.logs = [];
+      
+      if (this.currentProjectId) {
+        await window.electronAPI?.updateProjectStage(this.currentProjectId, 'stage2');
+        await this.$nextTick();
+        await this.saveProjectConfig();
+        console.log('[Stage2] 配置已保存，gamma:', this.gamma, ', indirect:', this.indirect, ', checkpoint:', this.checkpoint);
+      }
+      
+      this.addLog(`Stage2 训练已启动 - 项目：${finalProjectName}`, 'success');
+    },
+    
+    async waitForStageCompletion(stageType) {
+      // 轮询检查阶段是否完成
+      return new Promise((resolve, reject) => {
+        const checkInterval = setInterval(() => {
+          if (stageType === 'training' && !this.isTraining) {
+            clearInterval(checkInterval);
+            resolve();
+          } else if (stageType === 'training' && this.trainingStatus === 'error') {
+            clearInterval(checkInterval);
+            reject(new Error('训练阶段发生错误'));
+          } else if (stageType === 'baking' && this.bakingStatus === 'completed') {
+            clearInterval(checkInterval);
+            resolve();
+          } else if (stageType === 'baking' && this.bakingStatus === 'error') {
+            clearInterval(checkInterval);
+            reject(new Error('Baking 阶段发生错误'));
+          }
+        }, 1000);
+        
+        // 超时保护
+        setTimeout(() => {
+          clearInterval(checkInterval);
+          reject(new Error('等待超时'));
+        }, 24 * 60 * 60 * 1000);
+      });
+    },
+    
     async startStage2() {
       if (this.isTraining) {
         alert('训练正在进行中！');
@@ -701,35 +2340,33 @@ export default {
         return;
       }
       
-      // 启动前验证环境
-      try {
-        const envCheck = await window.electronAPI?.checkEnvironment();
-        if (!envCheck?.success || !envCheck?.valid) {
-          const errorMsg = envCheck?.error || 'Python 环境未就绪';
-          alert(`环境检查失败：${errorMsg}\n\n请先安装所需依赖后再试。`);
-          this.$router.push('/environment');
-          return;
-        }
-      } catch (error) {
-        console.error('环境检查异常:', error);
-        alert('环境检查失败，请先配置 Python 环境。');
-        this.$router.push('/environment');
-        return;
-      }
-      
       try {
         this.isTraining = true;
         this.currentIteration = 30000; // Stage2 从 30000 开始
         this.logs = [];
+              
+        if (this.currentProjectId) {
+          await window.electronAPI?.updateProjectStage(this.currentProjectId, 'stage2');
+          console.log(`[Stage2] 已更新项目阶段为 stage2, projectId: ${this.currentProjectId}`);
+          await this.saveProjectConfig();
+          console.log('[Stage2] 初始状态已保存');
+        }
+              
+        // 生成默认名称
+       const finalProjectName = this.projectName.trim() || this.generateDefaultProjectName();
         
         const config = {
           modelPath: this.modelPath,
           sourcePath: this.sourcePath,
-          iterations: 35000,
+          iterations: 40000,
           eval: this.evalMode,
+          resolution: this.resolution,
+          imageSubdir: this.imageSubdir,
           gamma: this.gamma,
           indirect: this.indirect,
-          checkpoint: this.checkpoint
+           checkpoint: this.checkpoint,
+          projectName: finalProjectName,
+          projectId: this.currentProjectId
         };
         
         const result = await window.electronAPI?.startTraining(config);
@@ -738,7 +2375,7 @@ export default {
           throw new Error(result?.error || '启动训练失败');
         }
         
-        this.addLog('Stage2 训练已启动', 'success');
+        this.addLog(`Stage2 训练已启动 - 项目：${finalProjectName}`, 'success');
       } catch (error) {
         console.error('启动 Stage2 失败:', error);
         this.addLog(`启动 Stage2 失败：${error.message}`, 'error');
@@ -747,7 +2384,6 @@ export default {
     },
     
     showConversionDialog() {
-      // 自动显示转换提示，通过 needsConversion 控制
       this.needsConversion = true;
     },
     
@@ -759,66 +2395,161 @@ export default {
       
       try {
         this.isConverting = true;
+        this.isStopping = false;
+        this.conversionLogs = [];
         this.conversionProgress = 0;
-        this.addLog('开始转换数据集...', 'info');
+        this.addLog('开始运行 COLMAP 进行数据集转换...', 'info');
+        this.addConversionLog('========================================', 'info');
+        this.addConversionLog('启动 COLMAP 三维重建流程', 'success');
+        this.addConversionLog('========================================', 'info');
         
+        // 启动转换
         const result = await window.electronAPI?.convertDataset({
           sourcePath: this.sourcePath,
           resize: this.resolution > 1
         });
         
+        // 检查是否是用户主动取消
+        if (result?.cancelled) {
+          this.addLog('数据集转换已被用户取消', 'warning');
+          this.isConverting = false;
+          this.isStopping = false;
+          return;
+        }
+        
         if (!result?.success) {
           throw new Error(result?.error || '转换失败');
         }
         
-        this.needsConversion = false;
-        this.addLog('✓ 数据集转换完成', 'success');
-        alert('数据集转换完成，可以开始训练了！');
       } catch (error) {
+        if (error.message.includes('取消') || error.message.includes('cancelled')) {
+          console.log('用户取消了转换操作');
+          this.isConverting = false;
+          this.isStopping = false;
+          return;
+        }
+        
         console.error('数据集转换失败:', error);
+        this.addConversionLog(`错误：${error.message}`, 'error');
         this.addLog(`数据集转换失败：${error.message}`, 'error');
-        alert(`转换失败：${error.message}`);
-      } finally {
         this.isConverting = false;
+        this.isStopping = false;
+        alert(`转换失败：${error.message}`);
       }
     },
     
-    async pauseTraining() {
-      // TODO: 实现暂停功能（需要修改 Python 脚本支持暂停）
-      this.addLog('暂停功能暂未实现', 'warning');
+    async stopConversion() {
+      if (!this.isConverting) return;
+      
+      try {
+        this.isStopping = true;
+        this.addConversionLog('正在停止转换进程...', 'warning');
+        const result = await window.electronAPI?.stopConversion();
+        
+        if (result?.success) {
+          this.addConversionLog('转换进程已停止', 'warning');
+          this.isConverting = false;
+          this.isStopping = false;
+          this.needsConversion = true;
+        } else {
+          throw new Error('停止转换失败');
+        }
+      } catch (error) {
+        console.error('停止转换失败:', error);
+        this.addConversionLog(`停止失败：${error.message}`, 'error');
+        this.isStopping = false;
+      }
+    },
+    
+    addConversionLog(message, type = 'info') {
+      const now = new Date();
+      const time = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
+      this.conversionLogs.push({ time, message, type });
+      if (this.conversionLogs.length > 100) {
+        this.conversionLogs.shift();
+      }
+    },
+    
+    scrollToConversionLogBottom() {
+      this.$nextTick(() => {
+        if (this.$refs.conversionLogContainer) {
+          this.$refs.conversionLogContainer.scrollTop = this.$refs.conversionLogContainer.scrollHeight;
+        }
+      });
     },
     
     async stopTraining() {
+      console.log('[停止操作] 开始执行停止流程');
+      this.userCancelled = true;
+      
       try {
         if (this.isTraining) {
-          await window.electronAPI?.stopTraining();
+          console.log('[停止操作] 正在停止训练进程...');
+          try {
+            const result = await window.electronAPI?.stopTraining();
+            console.log('[停止操作] 训练进程停止结果:', result);
+            
+            if (result?.success) {
+              this.addLog('训练进程已成功停止', 'warning');
+            } else {
+              console.warn('[停止操作] 训练进程停止失败:', result?.error);
+              this.addLog(`训练进程停止失败：${result?.error || '未知错误'}`, 'error');
+            }
+          } catch (ipcError) {
+            console.error('[停止操作] 停止训练进程 IPC 调用失败:', ipcError);
+            this.addLog(`停止训练进程通信失败：${ipcError.message}`, 'error');
+          }
           this.isTraining = false;
-          this.addLog('训练已停止', 'warning');
+          this.addLog('训练状态已更新为已停止', 'warning');
         }
         
+        // 停止烘焙进程
         if (this.isBaking) {
-          await window.electronAPI?.stopBaking();
+          console.log('[停止操作] 正在停止烘焙进程...');
+          try {
+            const result = await window.electronAPI?.stopBaking();
+            console.log('[停止操作] 烘焙进程停止结果:', result);
+            
+            if (result?.success) {
+              this.addBakingLog('烘焙进程已成功停止', 'warning');
+            } else {
+              console.warn('[停止操作] 烘焙进程停止失败:', result?.error);
+              this.addBakingLog(`烘焙进程停止失败：${result?.error || '未知错误'}`, 'error');
+            }
+          } catch (ipcError) {
+            console.error('[停止操作] 停止烘焙进程 IPC 调用失败:', ipcError);
+            this.addBakingLog(`停止烘焙进程通信失败：${ipcError.message}`, 'error');
+          }
           this.isBaking = false;
           this.bakingStatus = 'error';
-          this.addBakingLog('烘焙已停止', 'warning');
+          this.addBakingLog('烘焙状态已更新为已停止', 'warning');
         }
+        
+        this.$forceUpdate();
+        console.log('[停止操作] 停止流程完成');
+        
+        this.showRetryDeleteButtons = true;
+        this.addLog('训练已停止，可以选择重试或删除项目', 'warning');
+        
       } catch (error) {
-        console.error('停止训练失败:', error);
-        this.addLog(`停止训练失败：${error.message}`, 'error');
+        console.error('[停止操作] 发生异常:', error);
+        this.isTraining = false;
+        this.isBaking = false;
+        this.addLog(`停止过程出错：${error.message}`, 'error');
+        this.showRetryDeleteButtons = true;
+        this.bakingStatus = 'error';
+        this.addLog(`停止操作完成（可能未完全停止）`, 'warning');
+        this.$forceUpdate();
       }
     },
     
     selectFolder: async function(model) {
       console.log('开始选择文件夹，类型:', model);
-      
-      // 检查 electronAPI 是否存在
       if (!window.electronAPI) {
         console.error('electronAPI 未定义');
         alert('系统接口异常，请重启应用');
         return;
       }
-      
-      // 检查 selectDirectory 方法是否存在
       if (typeof window.electronAPI.selectDirectory !== 'function') {
         console.error('selectDirectory 方法不存在');
         alert('文件夹选择功能不可用');
@@ -836,12 +2567,26 @@ export default {
           
           if (model === 'modelPath') {
             this.modelPath = selectedPath;
+            // 自动更新检查点路径为输出目录下的 chkpnt30000.pth
+            const checkpointName = selectedPath.endsWith('/') || selectedPath.endsWith('\\') 
+              ? 'chkpnt30000.pth' 
+              : (selectedPath.includes('\\') ? '\\chkpnt30000.pth' : '/chkpnt30000.pth');
+            this.checkpoint = selectedPath + checkpointName;
+            this.addLog(`输出路径已设置，检查点路径自动更新为：${this.checkpoint}`, 'info');
+            await this.checkOutputFolderEmpty(selectedPath);
+            
+            // 自动保存
+            this.triggerAutoSave();
           } else if (model === 'sourcePath') {
             this.sourcePath = selectedPath;
             // 自动检查数据集格式
             await this.checkDatasetFormat(selectedPath);
+            // 自动保存
+            this.triggerAutoSave();
           } else if (model === 'checkpoint') {
             this.checkpoint = selectedPath;
+            // 自动保存
+            this.triggerAutoSave();
           }
         } else if (result && result.canceled) {
           console.log('用户取消了选择');
@@ -856,8 +2601,6 @@ export default {
     
     selectFile: async function(model) {
       console.log('开始选择文件，类型:', model);
-      
-      // 检查 electronAPI 是否存在
       if (!window.electronAPI) {
         console.error('electronAPI 未定义');
         alert('系统接口异常，请重启应用');
@@ -884,6 +2627,7 @@ export default {
         if (result && !result.canceled && result.filePaths && result.filePaths.length > 0) {
           this.checkpoint = result.filePaths[0];
           console.log('选中的文件:', this.checkpoint);
+          this.triggerAutoSave();
         } else if (result && result.canceled) {
           console.log('用户取消了选择');
         } else {
@@ -892,6 +2636,173 @@ export default {
       } catch (error) {
         console.error('选择文件异常:', error);
         alert(`无法打开文件选择对话框：${error.message}`);
+      }
+    },
+    
+    async retryTraining() {
+      console.log('[重试] 开始执行重试流程');
+      
+      if (!this.currentProjectId || !this.modelPath) {
+        this.addLog('错误：缺少项目 ID 或模型路径', 'error');
+        return;
+      }
+      
+      try {
+        this.addLog(`正在删除项目记录：${this.currentProjectId}`, 'warning');
+        const deleteProjectResult = await window.electronAPI?.deleteProjectAndOutput(
+          this.currentProjectId, 
+          null 
+        );
+        
+        if (deleteProjectResult?.success) {
+          this.addLog('✓ 项目记录已删除', 'success');
+        } else {
+          this.addLog(`删除项目记录失败：${deleteProjectResult?.error || '未知错误'}`, 'error');
+        }
+        
+        if (this.modelPath) {
+          this.addLog(`正在清空输出目录：${this.modelPath}`, 'warning');
+          const deleteDirResult = await window.electronAPI?.deleteOutputDirectory(this.modelPath);
+          
+          if (deleteDirResult?.success) {
+            this.addLog('✓ 输出目录已清空', 'success');
+          } else {
+            this.addLog(`删除输出目录失败：${deleteDirResult?.error || '未知错误'}`, 'error');
+          }
+        }
+        
+        this.showRetryDeleteButtons = false;
+        this.trainingStatus = 'idle';
+        this.bakingStatus = 'idle';
+        this.currentIteration = 0;
+        this.logs = [];
+        this.bakingLogs = [];
+        this.lossData = [];
+        this.psnrData = [];
+        this.ssimData = [];
+        this.evalL1Data = [];
+        this.previewImage = null;
+        this.currentProjectId = null;
+        
+        // 清空 ECharts
+        this.$nextTick(() => {
+          this.updateLossChart();
+          this.updatePsnrChart();
+          this.updateSsimChart();
+          this.updateEvalL1Chart();
+        });
+        
+        this.addLog('状态已重置，将以新项目方式重新开始训练', 'info');
+        
+        await this.startFullTraining();
+        
+      } catch (error) {
+        console.error('[重试] 发生异常:', error);
+        this.addLog(`重试失败：${error.message}`, 'error');
+      }
+    },
+    
+    // 保存训练完成的项目到项目列表
+    async saveToProjects() {
+      console.log('[保存] 开始执行保存流程');
+      
+      if (!this.currentProjectId) {
+        this.addLog('错误：项目 ID 不存在', 'error');
+        return;
+      }
+      
+      try {
+        // 获取最后渲染的图像作为缩略图
+        this.addLog('正在获取最新渲染图像...', 'info');
+        const imageResult = await window.electronAPI?.getLatestRenderedImage(this.modelPath);
+        
+        let thumbnailBase64 = null;
+        if (imageResult?.success && imageResult.imageBase64) {
+          thumbnailBase64 = imageResult.imageBase64;
+          console.log('[保存] 已获取最新渲染图像');
+        } else {
+          console.warn('[保存] 未找到渲染图像，继续保存但不包含缩略图');
+        }
+        
+        this.addLog('正在保存到项目列表...', 'info');
+        const saveResult = await window.electronAPI?.saveToProjectsList({
+          projectId: this.currentProjectId,
+          thumbnailBase64
+        });
+        
+        if (saveResult?.success) {
+          this.addLog('✓ 项目已成功保存到项目列表！', 'success');
+          
+          this.showCompleteButtons = false;
+        
+          const goToProjects = confirm('项目已保存成功！是否立即跳转到项目列表查看？');
+          if (goToProjects) {
+            this.$router.push({ name: 'projects' });
+          }
+        } else {
+          this.addLog(`保存失败：${saveResult?.error || '未知错误'}`, 'error');
+        }
+        
+      } catch (error) {
+        console.error('[保存] 发生异常:', error);
+        this.addLog(`保存失败：${error.message}`, 'error');
+      }
+    },
+    
+    async deleteProject() {
+      console.log('[删除] 开始执行删除流程');
+      
+      if (!this.currentProjectId) {
+        this.addLog('错误：项目 ID 不存在', 'error');
+        return;
+      }
+      
+      // 确认删除
+      const confirmed = confirm(`确定要删除项目 "${this.projectName}" 及其所有输出文件吗？\n\n此操作不可恢复！`);
+      
+      if (!confirmed) {
+        this.addLog('用户取消了删除操作', 'warning');
+        return;
+      }
+      
+      try {
+        const deleteResult = await window.electronAPI?.deleteProjectAndOutput(
+          this.currentProjectId, 
+          this.modelPath
+        );
+        
+        if (deleteResult?.success) {
+          this.addLog('项目及其输出已成功删除', 'success');
+          
+          this.projectName = '';
+          this.modelPath = '';
+          this.sourcePath = '';
+          this.checkpoint = '';
+          this.currentProjectId = null;
+          this.showRetryDeleteButtons = false;
+          this.trainingStatus = 'idle';
+          this.bakingStatus = 'idle';
+          this.currentIteration = 0;
+          this.logs = [];
+          this.bakingLogs = [];
+          this.lossData = [];
+          this.psnrData = [];
+          this.ssimData = [];
+          this.evalL1Data = [];
+          this.previewImage = null;
+          
+          this.addLog('表单已清空，可以创建新项目', 'info');
+          
+          if (window.electronAPI?.onTrainingQueueUpdate) {
+            console.log('[删除] 触发队列更新');
+          }
+        } else {
+          this.addLog(`删除失败：${deleteResult?.error || '未知错误'}`, 'error');
+        }
+        
+      } catch (error) {
+        console.error('[删除] 发生异常:', error);
+        this.addLog(`删除失败：${error.message}`, 'error');
       }
     },
     
@@ -926,6 +2837,51 @@ export default {
       } catch (error) {
         console.error('数据集检查失败:', error);
         this.addLog(`数据集检查异常：${error.message}`, 'error');
+      }
+    },
+    
+    async checkOutputFolderEmpty(folderPath) {
+      try {
+        if (!window.electronAPI?.checkFolderEmpty) {
+          console.warn('checkFolderEmpty 方法不存在');
+          return;
+        }
+        
+        const result = await window.electronAPI.checkFolderEmpty(folderPath);
+        
+        if (result.success) {
+          if (!result.exists) {
+            this.addLog(`📁 输出目录不存在，系统将在训练时自动创建：${folderPath}`, 'warning');
+          } else if (result.isEmpty) {
+            this.addLog(`✅ 输出目录为空，可以安全使用：${folderPath}`, 'success');
+          } else {
+            const fileCount = result.fileCount;
+            const sampleFiles = result.files || [];
+            let warningMsg = `⚠️ 输出目录非空，包含 ${fileCount} 个文件/文件夹。继续训练可能会覆盖现有文件！`;
+            
+            if (sampleFiles.length > 0) {
+              warningMsg += '\n\n部分文件:\n• ' + sampleFiles.join('\n• ');
+              if (fileCount > 10) {
+                warningMsg += `\n... 还有 ${fileCount - 10} 个文件`;
+              }
+            }
+            
+            this.addLog(warningMsg, 'warning');
+            
+            const confirmed = confirm(`${warningMsg}\n\n是否继续使用该目录？`);
+            if (!confirmed) {
+              this.modelPath = '';
+              this.checkpoint = '';
+              this.addLog('已取消输出目录选择', 'info');
+            }
+          }
+        } else {
+          console.error('[FolderCheck] 检查失败:', result.error);
+          this.addLog(`检查输出目录失败：${result.error}`, 'error');
+        }
+      } catch (error) {
+        console.error('[FolderCheck] 检查异常:', error);
+        this.addLog(`检查输出目录异常：${error.message}`, 'error');
       }
     },
   }
@@ -1060,6 +3016,7 @@ export default {
   gap: 0.75rem;
 }
 
+.start-full-btn,
 .start-btn,
 .baking-btn {
   width: 100%;
@@ -1077,10 +3034,26 @@ export default {
   font-size: 0.938rem;
 }
 
+.start-full-btn:disabled,
 .start-btn:disabled,
 .baking-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.start-full-btn {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  box-shadow: 0 4px 6px rgba(102, 126, 234, 0.3);
+}
+
+.start-full-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, #764ba2 0%, #667eea 100%);
+  box-shadow: 0 6px 8px rgba(102, 126, 234, 0.4);
+  transform: translateY(-1px);
+}
+
+.start-full-btn .iconify {
+  font-size: 1.125rem;
 }
 
 .start-btn {
@@ -1108,12 +3081,10 @@ export default {
 }
 
 .control-buttons {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
+  display: flex;
   gap: 0.5rem;
 }
 
-.pause-btn,
 .stop-btn {
   padding: 0.625rem;
   border-radius: 0.5rem;
@@ -1122,24 +3093,106 @@ export default {
   border: none;
   cursor: pointer;
   transition: all 0.2s;
-}
-
-.pause-btn {
-  background-color: #fef3c7;
-  color: #92400e;
-}
-
-.pause-btn:hover:not(:disabled) {
-  background-color: #fde68a;
-}
-
-.stop-btn {
   background-color: #fee2e2;
   color: #991b1b;
 }
 
 .stop-btn:hover:not(:disabled) {
   background-color: #fecaca;
+}
+
+.retry-delete-buttons {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid #e2e8f0;
+}
+
+.retry-btn {
+  flex: 1;
+  padding: 0.625rem 1rem;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s;
+  background-color: #dbeafe;
+  color: #1e40af;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+}
+
+.retry-btn:hover:not(:disabled) {
+  background-color: #bfdbfe;
+}
+
+.retry-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.delete-btn {
+  flex: 1;
+  padding: 0.625rem 1rem;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s;
+  background-color: #fee2e2;
+  color: #991b1b;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+}
+
+.delete-btn:hover:not(:disabled) {
+  background-color: #fecaca;
+}
+
+.delete-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.complete-buttons {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid #e2e8f0;
+}
+
+.save-btn {
+  flex: 1;
+  padding: 0.625rem 1rem;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s;
+  background-color: #dcfce7;
+  color: #166534;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+}
+
+.save-btn:hover:not(:disabled) {
+  background-color: #bbf7d0;
+}
+
+.save-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .monitoring-panel {
@@ -1188,8 +3241,17 @@ export default {
 
 .charts-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, 1fr);
+  grid-template-rows: auto;
   gap: 1.5rem;
+  width: 100%;
+  min-width: 0;
+  transition: grid-template-columns 0.3s ease;
+}
+
+.charts-grid .chart-card {
+  min-width: 0;
+  min-height: 300px;
 }
 
 .chart-card {
@@ -1198,6 +3260,12 @@ export default {
   border-radius: 1rem;
   border: 1px solid #e2e8f0;
   box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  width: 100%;
+  height: 100%;
+  min-height: 300px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
 }
 
 .chart-title,
@@ -1210,8 +3278,11 @@ export default {
 }
 
 .chart-container {
-  height: 16rem;
+  height: calc(100% - 40px);
+  min-height: 240px;
   width: 100%;
+  flex: 1;
+  position: relative;
 }
 
 .preview-card {
@@ -1219,7 +3290,57 @@ export default {
   border-radius: 1rem;
   border: 1px solid #e2e8f0;
   box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
-  padding: 1rem;
+  padding: 1.5rem;
+}
+
+.preview-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.refresh-preview-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  background-color: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.5rem;
+  color: #64748b;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.refresh-preview-btn:hover:not(:disabled) {
+  background-color: #f1f5f9;
+  color: #1e293b;
+}
+
+.refresh-preview-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.refresh-preview-btn .iconify {
+  font-size: 1rem;
+}
+
+.refresh-preview-btn .iconify.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.preview-title {
+  font-size: 1.125rem;
+  font-weight: bold;
+  color: #1e293b;
+  margin: 0;
 }
 
 .preview-container {
@@ -1231,17 +3352,23 @@ export default {
   display: flex;
   align-items: center;
   justify-content: center;
+  min-width: 0; 
 }
 
 .preview-image {
   width: 100%;
   height: 100%;
   object-fit: contain;
+  display: block; 
+  max-width: 100%;
+  max-height: 100%;
 }
 
 .preview-placeholder {
   color: #64748b;
   font-size: 0.875rem;
+  text-align: center;
+  padding: 1rem;
 }
 
 .iteration-overlay {
@@ -1460,5 +3587,261 @@ export default {
   padding: 0.5rem 0.75rem;
   font-size: 0.875rem;
   cursor: pointer;
+}
+
+.help-text {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  margin-top: 0.375rem;
+  font-size: 0.75rem;
+  color: #64748b;
+}
+
+.conversion-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  backdrop-filter: blur(4px);
+}
+
+.conversion-modal {
+  background: white;
+  border-radius: 1rem;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+  width: 90%;
+  max-width: 800px;
+  max-height: 80vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  animation: modalSlideIn 0.3s ease-out;
+}
+
+@keyframes modalSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-20px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.modal-header {
+  padding: 1.5rem;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.modal-title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0;
+}
+
+.modal-body {
+  padding: 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  overflow-y: auto;
+}
+
+.loading-animation {
+  position: relative;
+  width: 80px;
+  height: 80px;
+  margin: 0 auto;
+}
+
+.spinner-ring {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  border: 3px solid transparent;
+  border-top-color: #667eea;
+  border-radius: 50%;
+  animation: spin 1.2s cubic-bezier(0.5, 0, 0.5, 1) infinite;
+}
+
+.spinner-ring:nth-child(1) {
+  animation-delay: -0.45s;
+  border-top-color: #667eea;
+}
+
+.spinner-ring:nth-child(2) {
+  width: 70%;
+  height: 70%;
+  top: 15%;
+  left: 15%;
+  animation-delay: -0.3s;
+  border-top-color: #764ba2;
+}
+
+.spinner-ring:nth-child(3) {
+  width: 40%;
+  height: 40%;
+  top: 30%;
+  left: 30%;
+  animation-delay: -0.15s;
+  border-top-color: #f59e0b;
+}
+
+@keyframes spin {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+.progress-info {
+  text-align: center;
+}
+
+.loading-text {
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: #1e293b;
+  margin-bottom: 0.5rem;
+}
+
+.loading-subtext {
+  font-size: 0.875rem;
+  color: #64748b;
+  margin: 0;
+}
+
+.conversion-log-container {
+  background: #f8fafc;
+  border-radius: 0.75rem;
+  border: 1px solid #e2e8f0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  max-height: 300px;
+}
+
+.log-header {
+  padding: 0.75rem 1rem;
+  background: #f1f5f9;
+  border-bottom: 1px solid #e2e8f0;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #475569;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.log-output {
+  flex: 1;
+  max-height: 250px;
+  overflow-y: auto;
+  padding: 1rem;
+  font-family: 'Courier New', monospace;
+  font-size: 0.75rem;
+  line-height: 1.6;
+}
+
+.log-output .log-line {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.375rem;
+  padding: 0.375rem;
+  border-radius: 0.25rem;
+}
+
+.log-output .log-line.info {
+  background-color: transparent;
+  color: #334155;
+}
+
+.log-output .log-line.error {
+  background-color: #fee2e2;
+  color: #991b1b;
+}
+
+.log-output .log-line.success {
+  background-color: #dcfce7;
+  color: #166534;
+}
+
+.log-output .log-line.warning {
+  background-color: #fef3c7;
+  color: #92400e;
+}
+
+.log-output .log-time {
+  color: #94a3b8;
+  font-size: 0.625rem;
+  white-space: nowrap;
+}
+
+.log-output .log-message {
+  flex: 1;
+  word-break: break-all;
+}
+
+.modal-footer {
+  padding: 1rem 1.5rem;
+  background: #f8fafc;
+  border-top: 1px solid #e2e8f0;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.cancel-btn {
+  padding: 0.625rem 1.25rem;
+  background-color: #ef4444;
+  color: white;
+  border: none;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.cancel-btn:hover:not(:disabled) {
+  background-color: #dc2626;
+}
+
+.cancel-btn:disabled {
+  background-color: #fca5a5;
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.spin-icon {
+  animation: spinIcon 2s linear infinite;
+}
+
+@keyframes spinIcon {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 </style>

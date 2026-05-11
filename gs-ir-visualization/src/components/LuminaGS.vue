@@ -34,10 +34,6 @@
                 <span class="icon iconify" data-icon="solar:folder-2-linear"></span>
                 <span class="nav-text">项目</span>
               </router-link>
-              <router-link class="nav-item" :to="{name: 'train'}" active-class="active-nav-item">
-                <span class="icon iconify" data-icon="solar:dumbbells-linear"></span>
-                <span class="nav-text">模型训练</span>
-              </router-link>
               <router-link class="nav-item" :to="{name: 'progress'}" active-class="active-nav-item">
                 <span class="icon iconify" data-icon="solar:chart-2-linear"></span>
                 <span class="nav-text">渲染进度</span>
@@ -55,9 +51,6 @@
               <router-link class="nav-item-collapsed" :to="{name: 'projects'}" active-class="active-nav-item">
                 <span class="icon iconify" data-icon="solar:folder-2-linear"></span>
               </router-link>
-              <router-link class="nav-item-collapsed" :to="{name: 'train'}" active-class="active-nav-item">
-                <span class="icon iconify" data-icon="solar:dumbbells-linear"></span>
-              </router-link>
               <router-link class="nav-item-collapsed" :to="{name: 'progress'}" active-class="active-nav-item">
                 <span class="icon iconify" data-icon="solar:chart-2-linear"></span>
               </router-link>
@@ -66,12 +59,6 @@
               </router-link>
             </div>
           </nav>
-          
-          <div class="sidebar-footer">
-            <div class="user-avatar">
-              <img alt="User Profile" class="avatar-img" :src="avatarImage" @error="onImageError">
-            </div>
-          </div>
         </div>
       </aside>
       
@@ -113,15 +100,12 @@ export default {
     RouterLink
   },
   props: {
-    // 接收来自父组件的插槽内容
   },
   data() {
     return {
       sidebarExpanded: false,
       expandTimer: null,
       avatarImage: 'https://modao.cc/agent-py/media/generated_images/2026-01-30/6190da8135da4d32999730787ce10cac.jpg',
-      isMaximized: false,
-      // 保存事件处理器的引用，以便能够正确移除
       maximizedHandler: null,
       restoredHandler: null
     }
@@ -158,7 +142,6 @@ export default {
     onImageError() {
       this.avatarImage = '/default-avatar.png';
     },
-    // 窗口控制方法
     minimizeWindow() {
       if (window.electronAPI) {
         window.electronAPI.minimizeWindow();
@@ -184,7 +167,6 @@ export default {
     }
   },
   mounted() {
-    // 创建事件处理器函数并保存引用
     this.maximizedHandler = () => {
       console.log('收到窗口最大化事件');
       this.isMaximized = true;
@@ -195,16 +177,10 @@ export default {
       this.isMaximized = false;
     };
     
-    // 监听窗口最大化事件
     window.addEventListener('window-maximized', this.maximizedHandler);
-    
-    // 监听窗口恢复事件
     window.addEventListener('window-restored', this.restoredHandler);
-    
-    // 初始化时检查当前窗口状态
     this.$nextTick(() => {
       if (window.electronAPI) {
-        // 可以在这里添加获取当前窗口状态的逻辑
         console.log('组件挂载完成，当前窗口状态:', this.isMaximized ? '最大化' : '普通');
       }
     });
@@ -214,7 +190,7 @@ export default {
       clearTimeout(this.expandTimer);
     }
     
-    // 正确移除事件监听器
+    // 移除监听器
     if (this.maximizedHandler) {
       window.removeEventListener('window-maximized', this.maximizedHandler);
     }
@@ -228,7 +204,6 @@ export default {
 </script>
 
 <style scoped>
-/* 基础容器样式 */
 .main-container {
   background-color: #f8fafc;
   font-family: ui-sans-serif, system-ui, sans-serif;
@@ -237,7 +212,6 @@ export default {
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  /* 确保没有内外边距造成间隙 */
   margin: 0;
   padding: 0;
 }
@@ -246,12 +220,10 @@ export default {
   display: flex;
   height: 100vh;
   padding-top: 4rem;
-  /* 确保没有额外的padding造成间隙 */
   margin: 0;
   padding: 0;
 }
 
-/* 顶栏样式 */
 .top-bar {
   position: fixed;
   top: 0;
@@ -288,7 +260,6 @@ export default {
   cursor: pointer;
 }
 
-/* 侧边栏样式 */
 .sidebar {
   position: fixed;
   left: 0;
@@ -306,7 +277,7 @@ export default {
 }
 
 .sidebar.expanded {
-  width: 15rem;
+  width: 12rem;
 }
 
 .sidebar.collapsed {
@@ -346,7 +317,6 @@ export default {
   height: 1.5rem;
 }
 
-/* 导航菜单样式 */
 .main-navigation {
   display: flex;
   flex-direction: column;
@@ -371,15 +341,18 @@ export default {
   min-height: 2.5rem;
 }
 
-/* 收缩状态下居中对齐 */
 .nav-collapsed .nav-item-collapsed {
-  padding-left: 0.8rem;
+  padding-left: 1.75rem;
 }
 
-/* 展开状态下左对齐，为文字留出空间 */
 .nav-expanded .nav-item {
   justify-content: flex-start;
-  padding-left: 0.8rem;
+  padding-left: 1.75rem;
+}
+
+.nav-expanded .nav-item .icon {
+  width: 1.5rem;
+  text-align: center;
 }
 
 .nav-text {
@@ -391,7 +364,6 @@ export default {
   text-overflow: ellipsis;
 }
 
-/* 侧边栏底部 */
 .sidebar-footer {
   margin-top: auto;
   width: 100%;
@@ -412,7 +384,6 @@ export default {
   object-fit: cover;
 }
 
-/* 主内容区样式 */
 .main-content-area {
   flex: 1;
   height: 100%;
@@ -420,17 +391,15 @@ export default {
   display: flex;
   flex-direction: column;
   transition: margin-left 0.3s ease;
-  margin-left: 5rem; /* 默认收缩状态下的左边距 */
-  /* 确保没有额外的padding/margin */
+  margin-left: 5rem;
   padding: 0;
   margin-top: 0;
 }
 
 .main-content-area.sidebar-expanded {
-  margin-left: 15rem; /* 展开状态下的左边距 */
+  margin-left: 12rem;
 }
 
-/* 响应式调整：小屏幕设备 */
 @media (max-width: 768px) {
   .main-content-area {
     margin-left: 4rem;
@@ -441,7 +410,6 @@ export default {
   }
 }
 
-/* 内容头部 */
 .content-header {
   height: 4rem;
   background-color: white;
@@ -449,7 +417,7 @@ export default {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 1.5rem; /* 适中的左右内边距 */
+  padding: 0 1.5rem; 
   flex-shrink: 0;
 }
 
@@ -524,16 +492,14 @@ export default {
   margin-right: 0.5rem;
 }
 
-/* 内容主体 */
 .content-body {
   flex: 1;
   overflow: hidden;
   position: relative;
-  padding: 0; /* 确保无内边距 */
-  margin: 0; /* 确保无外边距 */
+  padding: 0;
+  margin: 0;
 }
 
-/* 动画效果 */
 @keyframes pulse-soft {
   0%, 100% {
     opacity: 1;
@@ -543,7 +509,6 @@ export default {
   }
 }
 
-/* 路由激活状态 */
 .nav-item.router-link-exact-active .icon,
 .nav-item-collapsed.router-link-exact-active .icon {
   color: #9333ea !important;
@@ -560,7 +525,12 @@ export default {
   color: #9333ea !important;
 }
 
-/* 滚动条隐藏 */
+.nav-item:focus,
+.nav-item-collapsed:focus,
+button:focus {
+  outline: none;
+}
+
 .main-container::-webkit-scrollbar,
 .content-body::-webkit-scrollbar,
 .sidebar::-webkit-scrollbar {

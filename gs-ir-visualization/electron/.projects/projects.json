@@ -1,0 +1,36 @@
+[
+  {
+    "projectId": "project_20260314_002_20260314_0025_jvi",
+    "name": "Counter",
+    "outputPath": "E:\\GraduationProject\\Testoutput",
+    "lastModified": "2026-04-04T08:20:22.565Z",
+    "status": "completed",
+    "currentIteration": 40000,
+    "configFile": "E:\\GraduationProject\\Testoutput\\.luminags\\project_20260314_002_20260314_0025_jvi.json",
+    "stage": "stage2",
+    "thumbnailPath": "E:\\GraduationProject\\Testoutput\\.luminags\\thumbnail_1773425750947.png",
+    "sourcePath": "E:\\GraduationProject\\tools\\GS-IR-main\\datasets\\nerf_real_360\\counter"
+  },
+  {
+    "projectId": "project_20260314_002_20260314_0104_v9j",
+    "name": "project_20260314_0025",
+    "outputPath": "E:\\GraduationProject\\Testoutput",
+    "lastModified": "2026-03-13T17:04:29.311Z",
+    "status": "error",
+    "currentIteration": 0,
+    "configFile": "E:\\GraduationProject\\Testoutput\\.luminags\\project_20260314_002_20260314_0104_v9j.json",
+    "stage": "stage1"
+  },
+  {
+    "projectId": "project_20260403_233_20260403_2336_c56",
+    "name": "Garden",
+    "outputPath": "E:\\GraduationProject\\output",
+    "lastModified": "2026-04-04T08:19:49.960Z",
+    "status": "completed",
+    "currentIteration": 40000,
+    "configFile": "E:\\GraduationProject\\output\\.luminags\\project_20260403_233_20260403_2336_c56.json",
+    "stage": "stage2",
+    "thumbnailPath": "E:\\GraduationProject\\output\\.luminags\\render_3800.png",
+    "sourcePath": "E:\\GraduationProject\\tools\\GS-IR-main\\datasets\\nerf_real_360\\garden"
+  }
+]

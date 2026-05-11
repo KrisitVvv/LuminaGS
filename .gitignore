@@ -8,3 +8,5 @@ Marigold/
 # 忽略 Windows 自动生成的 Zone Identifier 文件
 *:Zone.Identifier
 
+# 排除项目配置文件
+gs-ir-visualization/.projects/

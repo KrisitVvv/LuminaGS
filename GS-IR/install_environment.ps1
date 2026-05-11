@@ -2,7 +2,7 @@
 # LuminaGS 环境一键安装脚本 (PowerShell 版本)
 
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "  LuminaGS 环境一键安装脚本" -ForegroundColor Cyan
+Write-Host " 环境一键安装" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
