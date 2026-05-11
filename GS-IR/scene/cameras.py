@@ -32,6 +32,8 @@ class Camera(nn.Module):
         trans: np.ndarray = np.array([0.0, 0.0, 0.0]),
         scale: float = 1.0,
         data_device: str = "cuda",
+        da3_depth: Optional[torch.Tensor] = None,
+        da3_normal: Optional[torch.Tensor] = None,
     ) -> None:
         super(Camera, self).__init__()
 
@@ -85,6 +87,8 @@ class Camera(nn.Module):
         ).squeeze(0)
         self.camera_center = self.world_view_transform.inverse()[3, :3]
 
+        self.da3_depth = da3_depth.to(self.data_device) if da3_depth is not None else None
+        self.da3_normal = da3_normal.to(self.data_device) if da3_normal is not None else None
 
 class MiniCam:
     def __init__(

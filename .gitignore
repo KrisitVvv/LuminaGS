@@ -1,4 +1,12 @@
 gs-ir-visualization/node_modules
 
+# 忽略外部开源项目
+Depth-Anything-3/
+Relightable3DGaussian/
+Marigold/
+
+# 忽略 Windows 自动生成的 Zone Identifier 文件
+*:Zone.Identifier
+
 # 排除项目配置文件
 gs-ir-visualization/.projects/

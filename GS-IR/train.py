@@ -1,4 +1,5 @@
 import os
+os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
 import sys
 import uuid
 from argparse import ArgumentParser, Namespace
@@ -268,6 +269,126 @@ def training(
             normal_tv_loss = get_tv_loss(gt_image, normal_map, pad=1, step=1)
             loss += normal_tv_loss * normal_tv_weight
 
+            # DA3 Normal Supervision
+            if not dataset.is_baseline and hasattr(viewpoint_cam, "da3_normal") and viewpoint_cam.da3_normal is not None:
+                # [性能灾难修复]: 防止在 30000 次的主循环中重复进行每像素的矩阵乘法与 F.interpolate
+                if not hasattr(viewpoint_cam, "da3_normal_w"):
+                    # 1. 静态对齐坐标系: 将 DA3 (OpenCV) 的法线转换至 3DGS (OpenGL) 相机下
+                    gt_normal_c = viewpoint_cam.da3_normal.clone()  # [H, W, 3]
+                    gt_normal_c[..., 1:3] *= -1.0  # 静态翻转 Y, Z
+                    
+                    # 2. 提取 C2W 旋转矩阵
+                    c2w = torch.inverse(viewpoint_cam.world_view_transform.T)  # [4, 4]
+                    R_c2w = c2w[:3, :3]  # [3, 3]
+                    
+                    # 3. 将法线从相机空间变换到世界空间: N_world = R_c2w * N_camera
+                    _normal_w = torch.matmul(gt_normal_c, R_c2w.T)  # [H, W, 3]
+                    
+                    # 进行 L2 归一化并调整维度对齐渲染函数的输出 [3, H, W]
+                    _normal_w = F.normalize(_normal_w, p=2, dim=-1).permute(2, 0, 1).unsqueeze(0)  # [1, 3, H, W]
+                    
+                    # 对齐训练时的分辨率
+                    H, W = viewpoint_cam.image_height, viewpoint_cam.image_width
+                    if _normal_w.shape[2:] != (H, W):
+                        _normal_w = F.interpolate(_normal_w, size=(H, W), mode='nearest')
+                    
+                    # 缓存到相机对象中，后续迭代 O(1) 提取，包含彻底 detach()
+                    viewpoint_cam.da3_normal_w = _normal_w.squeeze(0).detach()  # [3, H, W]
+
+                # 提取已经完成所有变换、插值、脱离计算图的世界法线缓存
+                gt_normal_w = viewpoint_cam.da3_normal_w
+                
+                # --- 3. 天空掩蔽 (Opacity Masking) ---
+                # 获取渲染的不透明度构建 bool 掩码。仅选取具有实体的核心像素参与法线 Loss 计算。
+                opacity_map = rendering_result["opacity_map"].detach()  # [1, H, W]
+                valid_mask = (opacity_map > 0.5).squeeze(0)  # [H, W] 的真假二值化掩码
+                
+                # === DA3 法线坐标系翻转诊断测试 ===
+                if iteration == 1000:
+                    print(f"\n[DEBUG] --- Iteration {iteration} DA3 Normal Coordinate Diagnostics ---")
+                    
+                    # 1. 提取基础数据
+                    raw_da3_c = viewpoint_cam.da3_normal.clone().detach() # [H, W, 3] 原始相机空间
+                    c2w_matrix = torch.inverse(viewpoint_cam.world_view_transform.T)
+                    R_c2w_test = c2w_matrix[:3, :3] # [3, 3] 旋转矩阵
+                    norm_render_test = F.normalize(normal_map, p=2, dim=0).detach() # [3, H, W] 世界空间
+                    
+                    H_t, W_t = viewpoint_cam.image_height, viewpoint_cam.image_width
+                    
+                    # 2. 定义 8 种翻转组合 (X, Y, Z 乘数)
+                    flips = {
+                        "Baseline (No flip)": [1.0, 1.0, 1.0],
+                        "Flip X axis": [-1.0, 1.0, 1.0],
+                        "Flip Y axis": [1.0, -1.0, 1.0],
+                        "Flip Z axis": [1.0, 1.0, -1.0],
+                        "Flip X and Y": [-1.0, -1.0, 1.0],
+                        "Flip X and Z": [-1.0, 1.0, -1.0],
+                        "Flip Y and Z (OUR CURRENT)": [1.0, -1.0, -1.0],
+                        "Invert all (-X,-Y,-Z)": [-1.0, -1.0, -1.0],
+                    }
+                    
+                    # 3. 遍历测试
+                    for name, signs in flips.items():
+                        # a. 翻转相机空间法线
+                        test_n_c = raw_da3_c.clone()
+                        test_n_c[..., 0] *= signs[0]
+                        test_n_c[..., 1] *= signs[1]
+                        test_n_c[..., 2] *= signs[2]
+                        
+                        # b. 转换到世界坐标系
+                        test_n_w = torch.matmul(test_n_c, R_c2w_test.T) # [H, W, 3]
+                        test_n_w = F.normalize(test_n_w, p=2, dim=-1).permute(2, 0, 1).unsqueeze(0) # [1, 3, H, W]
+                        
+                        # c. 对齐分辨率
+                        if test_n_w.shape[2:] != (H_t, W_t):
+                            test_n_w = F.interpolate(test_n_w, size=(H_t, W_t), mode='nearest')
+                        test_n_w = test_n_w.squeeze(0) # [3, H, W]
+                        
+                        # d. 计算被 Mask 区域的余弦损失
+                        if valid_mask.sum() > 0:
+                            dot_product_test = torch.sum(norm_render_test * test_n_w, dim=0)
+                            loss_val = (1.0 - dot_product_test)[valid_mask].mean().item()
+                        else:
+                            loss_val = float('inf')
+                            
+                        print(f"[DEBUG] {name:<26}: {loss_val:.4f}")
+                    print("[DEBUG] ---------------------------------------------------------\n")
+                # === 测试代码结束 ===
+                
+                # --- 课程学习与先验衰减 (Prior Decay) ---
+                # 0 - 10000 步：DA3 先验主导，压平错误几何
+                if iteration <= 10000:
+                    current_lambda = 0.05
+                # 10000 - 25000 步：线性衰减，逐步交出控制权
+                elif iteration <= 25000:
+                    current_lambda = 0.05 * (1.0 - (iteration - 10000) / 15000.0)
+                # 25000 步以后：彻底关闭先验约束，全力拟合多视角光度学极限
+                else:
+                    current_lambda = 0.0
+                        
+                # --- 余弦相似度 + 一阶梯度损失 ---
+                if current_lambda > 0.0 and valid_mask.sum() > 0:
+                    # 确保参与计算的法线都已 L2 归一化
+                    norm_render = F.normalize(normal_map, p=2, dim=0)
+                    norm_da3 = F.normalize(gt_normal_w, p=2, dim=0) # 已经是 [3, H, W]
+
+                    # a. 余弦相似度损失 (仅约束方向，忽略绝对尺度误差)
+                    dot_product = torch.sum(norm_render * norm_da3, dim=0)
+                    cosine_loss = (1.0 - dot_product)[valid_mask].mean()
+
+                    # b. 一阶空间梯度损失 (保护 Lego 等数据集的硬边缘锐利度)
+                    diff_render_x = torch.abs(norm_render[:, :, :-1] - norm_render[:, :, 1:])
+                    diff_da3_x = torch.abs(norm_da3[:, :, :-1] - norm_da3[:, :, 1:])
+                    grad_loss_x = F.l1_loss(diff_render_x[:, valid_mask[:, :-1]], diff_da3_x[:, valid_mask[:, :-1]])
+                    
+                    diff_render_y = torch.abs(norm_render[:, :-1, :] - norm_render[:, 1:, :])
+                    diff_da3_y = torch.abs(norm_da3[:, :-1, :] - norm_da3[:, 1:, :])
+                    grad_loss_y = F.l1_loss(diff_render_y[:, valid_mask[:-1, :]], diff_da3_y[:, valid_mask[:-1, :]])
+
+                    # 组合子损失，赋予梯度损失适当权重（如 0.1）
+                    da3_total_loss = cosine_loss + 0.1 * (grad_loss_x + grad_loss_y)
+                    loss += current_lambda * da3_total_loss
+
         else:  # NOTE: PBR
             if occlusion_flag and indirect:
                 filepath = os.path.join(os.path.dirname(checkpoint_path), "occlusion_volumes.pth")
@@ -450,14 +571,27 @@ def training(
                     and iteration % opt.densification_interval == 0
                 ):
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-                    gaussians.densify_and_prune(
-                        opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold
-                    )
+                    grads = gaussians.xyz_gradient_accum / gaussians.denom
+                    grads[grads.isnan()] = 0.0
+
+                    gaussians.densify_and_clone(grads, opt.densify_grad_threshold, scene.cameras_extent)
+                    gaussians.densify_and_split(grads, opt.densify_grad_threshold, scene.cameras_extent)
+                    
+                    if iteration < int(opt.iterations * 0.8):
+                        gaussians.prune_gs_ir_custom(
+                            min_opacity=opt.min_opacity,
+                            extent=scene.cameras_extent,
+                            max_screen_size=size_threshold,
+                            prune_quantile=opt.prune_quantile
+                        )
 
                 if iteration % opt.opacity_reset_interval == 0 or (
                     dataset.white_background and iteration == opt.densify_from_iter
                 ):
                     gaussians.reset_opacity()
+
+            if iteration == 30000:
+                print(f"[ITER {iteration}] Total Gaussian points after geometric training: {gaussians.get_xyz.shape[0]}")
 
             # Optimizer step
             if iteration < opt.iterations:
@@ -799,6 +933,10 @@ if __name__ == "__main__":
     args.test_iterations.append(args.iterations)
     args.save_iterations.append(args.iterations)
     args.checkpoint_iterations.append(args.iterations)
+    
+    if getattr(args, 'is_baseline', False):
+        import os
+        os.environ['IS_BASELINE'] = '1'
 
     print("Optimizing " + args.model_path)
 

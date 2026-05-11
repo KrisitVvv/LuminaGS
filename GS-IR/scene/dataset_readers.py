@@ -17,6 +17,7 @@ from typing import Dict, List, NamedTuple, Optional, Tuple
 
 import numpy as np
 from PIL import Image
+import torch
 from plyfile import PlyData, PlyElement
 
 from scene.colmap_loader import (
@@ -44,6 +45,8 @@ class CameraInfo(NamedTuple):
     image_name: str
     width: int
     height: int
+    da3_depth: Optional[torch.Tensor] = None
+    da3_normal: Optional[torch.Tensor] = None
 
 
 class SceneInfo(NamedTuple):
@@ -115,6 +118,18 @@ def readColmapCameras(
         image_name = os.path.basename(image_path).split(".")[0]
         image = Image.open(image_path)
 
+        # 加载预生成的 DA3 深度与法线
+        base_folder = os.path.dirname(images_folder)
+        da3_depth_path = os.path.join(base_folder, "da3_depth", f"{image_name}.npy")
+        da3_normal_path = os.path.join(base_folder, "da3_normal", f"{image_name}.npy")
+        
+        da3_depth = None
+        da3_normal = None
+        if os.environ.get('IS_BASELINE') != '1':
+            if os.path.exists(da3_depth_path) and os.path.exists(da3_normal_path):
+                da3_depth = torch.from_numpy(np.load(da3_depth_path)).cpu()
+                da3_normal = torch.from_numpy(np.load(da3_normal_path)).cpu()
+
         cam_info = CameraInfo(
             uid=uid,
             R=R,
@@ -126,6 +141,8 @@ def readColmapCameras(
             image_name=image_name,
             width=width,
             height=height,
+            da3_depth=da3_depth,
+            da3_normal=da3_normal,
         )
         cam_infos.append(cam_info)
     sys.stdout.write("\n")
@@ -260,6 +277,20 @@ def readCamerasFromTransforms(
         FovY = fovy
         FovX = fovx
 
+        # 加载预生成的 DA3 深度与法线 (匹配 Blender 数据集的相对路径)
+        base_folder = path
+        # 修正路径拼接：使用 frame["file_path"] 获取相对于根目录的结构 (例如 train_000/rgba)
+        rel_base_path = frame["file_path"].lstrip("./")
+        da3_depth_path = os.path.join(base_folder, "da3_depth", f"{rel_base_path}.npy")
+        da3_normal_path = os.path.join(base_folder, "da3_normal", f"{rel_base_path}.npy")
+        
+        da3_depth = None
+        da3_normal = None
+        if os.environ.get('IS_BASELINE') != '1':
+            if os.path.exists(da3_depth_path) and os.path.exists(da3_normal_path):
+                da3_depth = torch.from_numpy(np.load(da3_depth_path)).cpu()
+                da3_normal = torch.from_numpy(np.load(da3_normal_path)).cpu()
+
         cam_infos.append(
             CameraInfo(
                 uid=idx,
@@ -272,6 +303,8 @@ def readCamerasFromTransforms(
                 image_name=image_name,
                 width=image.size[0],
                 height=image.size[1],
+                da3_depth=da3_depth,
+                da3_normal=da3_normal,
             )
         )
 

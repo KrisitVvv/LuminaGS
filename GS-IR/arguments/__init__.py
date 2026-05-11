@@ -59,6 +59,7 @@ class ModelParams(ParamGroup):
         self._white_background = False
         self.data_device = "cuda"
         self.eval = False
+        self.is_baseline = False
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args: Namespace) -> GroupParams:
@@ -94,6 +95,8 @@ class OptimizationParams(ParamGroup):
         self.densify_until_iter = 15_000
         self.densify_grad_threshold = 0.0002
         self.random_background = False
+        self.prune_quantile = 0.0      # 🚀 新增：自适应分位数剪枝的比例，默认为0.0
+        self.min_opacity = 0.005       # 确认默认值保持0.005
         super().__init__(parser, "Optimization Parameters")
 
 
