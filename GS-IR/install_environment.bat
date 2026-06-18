@@ -3,7 +3,7 @@ chcp 65001 >nul
 setlocal enabledelayedexpansion
 
 echo ========================================
-echo   LuminaGS 环境一键安装脚本
+echo   环境一键安装
 echo ========================================
 echo.
 
@@ -146,8 +146,4 @@ echo.
 echo ========================================
 echo   安装完成！
 echo ========================================
-echo.
-echo 请使用以下命令激活环境:
-echo   conda activate 3dgs-view
-echo.
 pause

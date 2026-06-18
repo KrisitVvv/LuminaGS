@@ -62,27 +62,41 @@
           <div class="queue-card">
             <h3 class="card-title">渲染队列</h3>
             <div class="queue-list">
-              <div class="queue-item active">
-                <div class="progress-bar-indicator"></div>
+              <!-- 项目列表 -->
+              <div 
+                v-for="(project, index) in projectQueue" 
+                :key="project.projectId"
+                class="queue-item"
+                :class="{ active: project.status === 'training', [getStatusClass(project.status)]: true }"
+                @click="resumeProject(project)"
+              >
+                <div class="progress-bar-indicator" v-if="project.status === 'training'"></div>
+                <div class="indicator-placeholder" v-else></div>
                 <div class="item-content">
                   <div class="item-header">
-                    <span class="task-name">Task_0982_Full</span>
-                    <span class="progress-percent">{{ renderProgress }}%</span>
+                    <span class="task-name">{{ project.name }}</span>
+                    <span :class="['status-badge', getStatusClass(project.status)]">
+                      {{ getStatusText(project.status) }}
+                    </span>
                   </div>
-                  <div class="progress-track">
-                    <div class="progress-fill" :style="{ width: renderProgress + '%' }"></div>
+                  <div class="item-details">
+                    <span class="detail-text">阶段：{{ project.stage === 'stage1' ? 'Stage1' : project.stage === 'baking' ? 'Baking' : 'Stage2' }}</span>
+                    <span class="detail-separator">|</span>
+                    <span class="detail-text">迭代：{{ project.currentIteration || 0 }}</span>
+                    <span class="detail-separator" v-if="project.lastModified">|</span>
+                    <span class="detail-time" v-if="project.lastModified">更新：{{ formatLastModified(project.lastModified) }}</span>
                   </div>
+                  <div class="progress-track" v-if="project.status === 'training'">
+                    <div class="progress-fill" :style="{ width: getProgressPercent(project) + '%' }"></div>
+                  </div>
+                  <div class="progress-track empty" v-else></div>
                 </div>
               </div>
-              <div class="queue-item pending">
-                <div class="indicator-placeholder"></div>
-                <div class="item-content">
-                  <div class="item-header">
-                    <span class="task-name">Client_Review_HQ</span>
-                    <span class="status-pending">等待中</span>
-                  </div>
-                  <div class="progress-track empty"></div>
-                </div>
+              
+              <!-- 空队列提示 -->
+              <div v-if="projectQueue.length === 0" class="no-projects">
+                <div class="no-projects-text">暂无训练项目</div>
+                <div class="no-projects-hint">前往训练页面创建新项目</div>
               </div>
             </div>
           </div>
@@ -109,15 +123,7 @@ export default {
   data() {
     return {
       renderProgress: 65,
-      trainingLogs: [
-        '[INFO] 初始化 Gaussian Splatting 模型',
-        '[INFO] 加载训练数据集: urban_scene',
-        '[INFO] 设置学习率: 0.001',
-        '[INFO] 开始第 12500 次迭代',
-        '[DEBUG] 当前 PSNR: 28.4 dB',
-        '[DEBUG] Loss: 0.0234',
-        '[INFO] VRAM 使用率: 85%'
-      ],
+      trainingLogs: [],
       // GPU监控数据
       gpuChart: null,
       gpuMonitorTimer: null,
@@ -132,29 +138,34 @@ export default {
         temperature: 0
       },
       // 显卡选择相关数据
-      showGpuList: false, // 控制下拉列表显示
-      availableGpus: [], // 可用的GPU列表
-      selectedGpuIndex: -1, // 当前选择的GPU索引，-1表示未选择
-      selectedGpuIdentifier: '', // 选中GPU的唯一标识符
-      // 图表数据存储
+      showGpuList: false,
+      availableGpus: [],
+      selectedGpuIndex: -1,
+      selectedGpuIdentifier: '',
       chartTimeData: [],
       utilizationData: [],
       memoryData: [],
-      maxDataPoints: 10 // 最多显示10个数据点
+      maxDataPoints: 10,
+      projectQueue: [],
+      queueRefreshTimer: null, 
+      latestRenderedImage: null,
+      renderedImageLoading: false,
+      renderedImagePath: null
     }
   },
   mounted() {
-    // 确保DOM完全渲染后再初始化图表
     this.$nextTick(() => {
       this.initChart();
       this.startGpuMonitoring();
-      this.updateTrainingLogs();
-      
-      // 添加额外的resize监听确保图表适应
+      this.loadProjectQueue();
+      this.queueRefreshTimer = setInterval(() => {
+        this.loadProjectQueue();
+      }, 5000);
+        
       const resizeObserver = new ResizeObserver(entries => {
         for (let entry of entries) {
           if (entry.target.id === 'gpu-chart' && this.gpuChart) {
-            // 使用防抖避免频繁重绘
+            // 防抖
             clearTimeout(this.resizeTimer);
             this.resizeTimer = setTimeout(() => {
               this.gpuChart.resize();
@@ -162,33 +173,57 @@ export default {
           }
         }
       });
-      
+        
       const chartContainer = document.getElementById('gpu-chart');
       if (chartContainer) {
         resizeObserver.observe(chartContainer);
-        // 保存观察器引用以便清理
         this.resizeObserver = resizeObserver;
       }
     });
-    
-    // 点击其他地方关闭下拉列表
+      
     document.addEventListener('click', this.handleDocumentClick);
+      
+    if (window.electronAPI?.onTrainingQueueUpdate) {
+      window.electronAPI.onTrainingQueueUpdate((data) => {
+        console.log('[队列更新] 收到队列更新:', data);
+        this.loadProjectQueue();
+      });
+    }
+    
+    // 监听训练输出
+    if (window.electronAPI?.onTrainingOutput) {
+      window.electronAPI.onTrainingOutput((data) => {
+        if (data && data.output) {
+          this.addTrainingLog(data.output);
+        }
+      });
+    }
+    
+    // 监听烘焙输出
+    if (window.electronAPI?.onBakingOutput) {
+      window.electronAPI.onBakingOutput((data) => {
+        if (data && data.output) {
+          this.addTrainingLog(data.output);
+        }
+      });
+    }
   },
   
   beforeUnmount() {
-    // 清理定时器
     if (this.gpuMonitorTimer) {
       clearInterval(this.gpuMonitorTimer);
     }
-    // 销毁图表实例
+    if (this.queueRefreshTimer) {
+      clearInterval(this.queueRefreshTimer);
+    }
     if (this.gpuChart) {
       this.gpuChart.dispose();
     }
-    // 断开ResizeObserver
+    // 断开 ResizeObserver
     if (this.resizeObserver) {
       this.resizeObserver.disconnect();
     }
-    // 清理resize定时器
+    // 清理定时器
     if (this.resizeTimer) {
       clearTimeout(this.resizeTimer);
     }
@@ -209,7 +244,7 @@ export default {
       if (index < this.availableGpus.length) {
         const selectedGpu = this.availableGpus[index];
         
-        // 创建GPU唯一标识符（厂商+型号+显存）
+        // 创建GPU标识
         this.selectedGpuIdentifier = `${selectedGpu.vendor}|${selectedGpu.model}|${selectedGpu.vram}`;
         this.selectedGpuIndex = index;
         this.gpuModel = `${selectedGpu.vendor} ${selectedGpu.model}`;
@@ -218,7 +253,7 @@ export default {
         console.log(`GPU标识符: ${this.selectedGpuIdentifier}`);
         
         try {
-          // 通知主进程设置选中的GPU索引
+          // 通知主进程
           if (window.electronAPI.setSelectedGpuIndex) {
             const setResult = await window.electronAPI.setSelectedGpuIndex(index);
             if (setResult.success) {
@@ -230,18 +265,12 @@ export default {
         } catch (error) {
           console.error('调用setSelectedGpuIndex失败:', error);
         }
-        
-        // 重新开始监控
         this.restartGpuMonitoring();
-        
-        // 关闭下拉列表
         this.showGpuList = false;
       }
     },
-    
-    // 重新开始GPU监控
+
     restartGpuMonitoring() {
-      // 清理现有定时器
       if (this.gpuMonitorTimer) {
         clearInterval(this.gpuMonitorTimer);
       }
@@ -257,7 +286,6 @@ export default {
         temperature: 0
       };
       
-      // 重新开始监控
       this.startGpuMonitoring();
     },
     
@@ -267,7 +295,7 @@ export default {
         if (window.electronAPI && window.electronAPI.getAllGpus) {
           const result = await window.electronAPI.getAllGpus();
           if (result.success) {
-            // 前端再做一次过滤确保安全
+            // 前端过滤
             const filteredGpus = result.data.filter(gpu => {
               const modelName = (gpu.model || '').toLowerCase();
               const vendorName = (gpu.vendor || '').toLowerCase();
@@ -292,7 +320,7 @@ export default {
                 vendorName.includes('virtual') ||
                 vendorName.includes('todesk') ||
                 vendorName.includes('remote') ||
-                !gpu.vram || gpu.vram < 32; // 至少32MB显存
+                !gpu.vram || gpu.vram < 32; 
               
               return !isInvalid;
             });
@@ -301,34 +329,30 @@ export default {
             filteredGpus.forEach((gpu, index) => {
               console.log(`${index}: ${gpu.vendor} ${gpu.model} (${gpu.vram}MB)`);
             });
-            
-            // 检查当前选中的GPU是否还在列表中
             if (this.selectedGpuIdentifier) {
               const selectedIndex = filteredGpus.findIndex(gpu => 
                 `${gpu.vendor}|${gpu.model}|${gpu.vram}` === this.selectedGpuIdentifier
               );
               
               if (selectedIndex !== -1) {
-                // 选中的GPU仍在列表中，保持选择
                 this.selectedGpuIndex = selectedIndex;
                 console.log(`保持选中GPU: ${filteredGpus[selectedIndex].vendor} ${filteredGpus[selectedIndex].model}`);
               } else {
-                // 选中的GPU不在列表中，需要重新选择
                 console.log('选中的GPU已不存在，重新选择...');
                 this.availableGpus = filteredGpus;
                 this.setDefaultNvidiaGpu();
-                return; // 避免重复设置
+                return;
               }
             }
             
             this.availableGpus = filteredGpus;
             
-            // 如果没有选中的GPU且列表不为空，设置默认选择
+            // 设置默认选择
             if (this.selectedGpuIndex === -1 && this.availableGpus.length > 0) {
               this.setDefaultNvidiaGpu();
             }
             
-            // 如果没有可用GPU，至少显示当前GPU
+            // 显示当前GPU
             if (this.availableGpus.length === 0 && window.electronAPI.getGpuInfo) {
               const currentGpu = await window.electronAPI.getGpuInfo();
               if (currentGpu.success) {
@@ -336,7 +360,6 @@ export default {
                 const modelName = (gpu.model || '').toLowerCase();
                 const vendorName = (gpu.vendor || '').toLowerCase();
                 
-                // 检查当前GPU是否有效
                 const isCurrentGpuValid = !(
                   modelName.includes('virtual') || 
                   modelName.includes('todesk') ||
@@ -363,23 +386,20 @@ export default {
       }
     },
     
-    // 设置默认选择NVIDIA显卡
+    // 默认选择NVIDIA显卡
     setDefaultNvidiaGpu() {
       if (this.availableGpus.length > 0) {
-        // 查找第一个NVIDIA显卡
         const nvidiaIndex = this.availableGpus.findIndex(gpu => 
           gpu.vendor && gpu.vendor.toLowerCase().includes('nvidia')
         );
         
         if (nvidiaIndex !== -1) {
-          // 找到NVIDIA显卡，设置为默认选择
           this.selectedGpuIndex = nvidiaIndex;
           const nvidiaGpu = this.availableGpus[nvidiaIndex];
           this.selectedGpuIdentifier = `${nvidiaGpu.vendor}|${nvidiaGpu.model}|${nvidiaGpu.vram}`;
           this.gpuModel = `${nvidiaGpu.vendor} ${nvidiaGpu.model}`;
           console.log(`默认选择NVIDIA显卡: ${this.gpuModel}`);
         } else {
-          // 没有找到NVIDIA显卡，选择第一个可用的
           this.selectedGpuIndex = 0;
           const firstGpu = this.availableGpus[0];
           this.selectedGpuIdentifier = `${firstGpu.vendor}|${firstGpu.model}|${firstGpu.vram}`;
@@ -438,15 +458,15 @@ export default {
           }
         },
         grid: {
-          left: '8%',    // 增加左边距确保Y轴标签完整显示
-          right: '8%',   // 增加右边距
-          top: '10%',    // 增加上边距
-          bottom: '10%', // 增加下边距确保X轴标签和图例完整显示
+          left: '8%',
+          right: '8%',
+          top: '10%',
+          bottom: '10%',
           containLabel: true
         },
         xAxis: {
           type: 'category',
-          boundaryGap: false, // 从最左侧开始绘制
+          boundaryGap: false,
           data: this.chartTimeData,
           axisLine: {
             lineStyle: {
@@ -456,8 +476,8 @@ export default {
           axisLabel: {
             color: '#64748b',
             fontSize: 12,
-            interval: 0, // 显示所有标签
-            rotate: 45   // 旋转标签避免重叠
+            interval: 0,
+            rotate: 45
           }
         },
         yAxis: [
@@ -481,7 +501,6 @@ export default {
               }
             }
           }
-          // 移除右侧Y轴配置
         ],
         series: [
           {
@@ -512,7 +531,7 @@ export default {
           {
             name: '显存使用率',
             type: 'line',
-            yAxisIndex: 0,  // 改为使用左侧Y轴
+            yAxisIndex: 0,
             smooth: true,
             data: this.memoryData,
             itemStyle: {
@@ -538,11 +557,8 @@ export default {
       };
 
       this.gpuChart.setOption(option);
-
-      // 监听窗口大小变化
       window.addEventListener('resize', this.handleResize);
       
-      // 确保图表正确渲染
       this.$nextTick(() => {
         if (this.gpuChart) {
           this.gpuChart.resize();
@@ -550,10 +566,9 @@ export default {
       });
     },
 
-    // 处理窗口大小变化
+    // 窗口变化
     handleResize() {
       if (this.gpuChart) {
-        // 添加轻微延迟确保DOM更新完成
         setTimeout(() => {
           this.gpuChart.resize();
         }, 100);
@@ -566,12 +581,9 @@ export default {
         this.fetchGpuData();
       }, 2000);
     },
-
-    // 处理GPU数据获取错误
+    //处理错误
     handleGpuError(errorMessage) {
       this.refreshStatus = '错误';
-      
-      // 分析错误类型并提供针对性提示
       let displayMessage = '数据获取失败';
       let hintText = '';
       
@@ -588,14 +600,12 @@ export default {
         hintText = '请检查硬件状态';
       }
       
-      // 只在没有用户选择时更新GPU型号
       if (this.selectedGpuIndex === -1) {
         this.gpuModel = displayMessage;
       }
       
       console.error('GPU监控错误:', errorMessage);
       
-      // 显示错误信息
       if (this.gpuChart) {
         this.gpuChart.setOption({
           title: {
@@ -629,60 +639,44 @@ export default {
     async fetchGpuData() {
       try {
         this.refreshStatus = '刷新中...';
-        
-        // 检查Electron API是否可用
         if (!window.electronAPI || !window.electronAPI.getGpuUsage) {
           throw new Error('Electron API不可用，请确保在Electron环境中运行');
         }
-        
-        // 获取GPU使用率数据
+        // 获取GPU使用率
         const usageResult = await window.electronAPI.getGpuUsage();
-        
         if (!usageResult.success) {
           throw new Error(usageResult.error || '获取GPU使用率数据失败');
         }
-        
         const gpuData = usageResult.data;
         
-        // 严格的数据验证和边界检查
+        // 数据验证
         const validatedData = {
           utilization: Math.max(0, Math.min(100, gpuData.utilization || 0)),
           memoryUsed: Math.max(0, gpuData.memoryUsed || 0),
-          memoryTotal: Math.max(1, gpuData.memoryTotal || 8192 * 1024 * 1024), // 默认8GB转为字节
+          memoryTotal: Math.max(1, gpuData.memoryTotal || 8192 * 1024 * 1024),
           temperature: Math.max(0, gpuData.temperature || 0),
           power: Math.max(0, gpuData.power || 0),
           fanSpeed: Math.max(0, Math.min(100, gpuData.fanSpeed || 0))
         };
-        
-        // 确保显存使用不超过总显存
         if (validatedData.memoryUsed > validatedData.memoryTotal) {
           validatedData.memoryUsed = validatedData.memoryTotal;
         }
-        
-        // 更新当前数据显示
         this.currentGpuData = validatedData;
         
-        // 更新GPU型号信息（但不改变用户选择）
+        // 更新GPU型号信息
         await this.updateGpuModelWithoutChangingSelection();
-        
-        // 添加到图表数据
         this.addToChartData(validatedData);
-        
-        // 更新图表
         this.updateChart();
-        
         this.refreshStatus = '就绪';
-        
-        // 为不同类型的GPU提供不同的日志信息
         const currentGpuName = this.gpuModel.toLowerCase();
         if (currentGpuName.includes('intel')) {
-          console.log(`✓ Intel集成显卡数据获取成功: ${validatedData.utilization}% (基于CPU负载推算)`);
+          console.log(`Intel集成显卡数据获取成功: ${validatedData.utilization}% (基于CPU负载推算)`);
         } else if (currentGpuName.includes('amd')) {
-          console.log(`✓ AMD集成显卡数据获取成功: ${validatedData.utilization}% (基于系统负载推算)`);
+          console.log(`AMD集成显卡数据获取成功: ${validatedData.utilization}% (基于系统负载推算)`);
         } else if (currentGpuName.includes('nvidia')) {
-          console.log(`✓ NVIDIA独立显卡数据获取成功: ${validatedData.utilization}% (直接硬件读取)`);
+          console.log(`NVIDIA独立显卡数据获取成功: ${validatedData.utilization}% (直接硬件读取)`);
         } else {
-          console.log(`✓ GPU数据获取成功: ${validatedData.utilization}%`);
+          console.log(`GPU数据获取成功: ${validatedData.utilization}%`);
         }
         
       } catch (error) {
@@ -691,27 +685,23 @@ export default {
       }
     },
 
-    // 更新GPU型号信息但不改变用户选择
+    // 更新GPU型号信息
     async updateGpuModelWithoutChangingSelection() {
       try {
         if (window.electronAPI.getGpuInfo) {
           const infoResult = await window.electronAPI.getGpuInfo();
           if (infoResult.success) {
             const currentGpuInfo = `${infoResult.data.vendor} ${infoResult.data.model}`;
-            
-            // 只在没有用户选择时更新GPU型号
             if (this.selectedGpuIndex === -1) {
               this.gpuModel = currentGpuInfo;
               console.log(`自动更新GPU型号: ${currentGpuInfo}`);
             } else {
-              // 有用户选择时，验证当前显示的GPU是否与系统报告的一致
               const displayedGpu = this.gpuModel;
               if (displayedGpu !== currentGpuInfo) {
                 console.warn(`警告: 显示的GPU(${displayedGpu})与系统报告的GPU(${currentGpuInfo})不一致`);
                 console.warn(`当前选中索引: ${this.selectedGpuIndex}`);
-                // 不自动更改用户选择，但记录不一致情况
               } else {
-                console.log(`✓ GPU一致性验证通过: ${currentGpuInfo}`);
+                console.log(`GPU一致性验证通过: ${currentGpuInfo}`);
               }
             }
           } else {
@@ -733,28 +723,21 @@ export default {
       const now = new Date();
       const timeString = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
       
-      // 添加新数据点
+      // 添加数据点
       this.chartTimeData.push(timeString);
       this.utilizationData.push(data.utilization);
       
-      // 将显存使用量转换为百分比，使用字节单位进行计算
       let memoryPercentage = 0;
       if (data.memoryTotal > 0) {
         memoryPercentage = Math.round((data.memoryUsed / data.memoryTotal) * 100);
       }
-      
-      // 确保百分比在合理范围内（0-100%）
       memoryPercentage = Math.max(0, Math.min(100, memoryPercentage));
       this.memoryData.push(memoryPercentage);
-      
-      // 保持数据点数量不超过最大值
       if (this.chartTimeData.length > this.maxDataPoints) {
         this.chartTimeData.shift();
         this.utilizationData.shift();
         this.memoryData.shift();
       }
-      
-      // 确保数组长度固定为maxDataPoints，不足时用null填充
       while (this.chartTimeData.length < this.maxDataPoints) {
         this.chartTimeData.unshift('');
         this.utilizationData.unshift(null);
@@ -765,12 +748,9 @@ export default {
     // 更新图表显示
     updateChart() {
       if (this.gpuChart) {
-        // 确保数据数组长度固定，不足时用null填充
         const fixedTimeData = [...this.chartTimeData];
         const fixedUtilizationData = [...this.utilizationData];
         const fixedMemoryData = [...this.memoryData];
-        
-        // 补充到固定长度
         while (fixedTimeData.length < this.maxDataPoints) {
           fixedTimeData.unshift('');
           fixedUtilizationData.unshift(null);
@@ -779,7 +759,7 @@ export default {
         
         this.gpuChart.setOption({
           xAxis: {
-            data: fixedTimeData.slice(-this.maxDataPoints) // 只显示最新的maxDataPoints个数据点
+            data: fixedTimeData.slice(-this.maxDataPoints) // 限制数据点
           },
           yAxis: [
             {
@@ -804,32 +784,188 @@ export default {
         });
       }
     },
-
-    // 更新训练日志
-    updateTrainingLogs() {
-      setInterval(() => {
-        const timestamp = new Date().toISOString().slice(0, 19).replace('T', ' ');
-        
-        // 根据当前GPU状态生成相关日志
-        const logs = [
-          `[${timestamp}] Iteration ${Math.floor(10000 + Math.random() * 20000)} | Loss: ${(0.001 + Math.random() * 0.01).toFixed(4)} | PSNR: ${(25 + Math.random() * 10).toFixed(2)}dB`,
-          `[${timestamp}] GPU状态 - 使用率: ${this.currentGpuData.utilization}% | 显存: ${Math.round((this.currentGpuData.memoryUsed / (1024 * 1024)).toFixed(1))}MB/${Math.round((this.currentGpuData.memoryTotal / (1024 * 1024)).toFixed(1))}MB (${Math.round((this.currentGpuData.memoryUsed / this.currentGpuData.memoryTotal) * 100)}%)`,
-          `[${timestamp}] 系统监控 - 温度: ${this.currentGpuData.temperature}°C | 功耗: ${Math.round(this.currentGpuData.power)}W | 风扇: ${this.currentGpuData.fanSpeed}%`
-        ];
-        
-        // 添加新日志并保持数组长度
-        this.trainingLogs.push(logs[Math.floor(Math.random() * logs.length)]);
-        if (this.trainingLogs.length > 20) {
-          this.trainingLogs.shift();
+    
+    // 添加训练日志
+    addTrainingLog(logText) {
+      if (!logText) return;
+      this.trainingLogs.push(logText);
+      if (this.trainingLogs.length > 100) {
+        this.trainingLogs.shift();
+      }
+      this.$nextTick(() => {
+        const logsContainer = document.querySelector('.logs-container');
+        if (logsContainer) {
+          logsContainer.scrollTop = logsContainer.scrollHeight;
         }
-      }, 3000);
+      });
     },
     
-    // 处理文档点击事件，用于关闭下拉列表
     handleDocumentClick(event) {
       const selectorContainer = document.querySelector('.gpu-selector-container');
       if (selectorContainer && !selectorContainer.contains(event.target)) {
         this.showGpuList = false;
+      }
+    },
+    
+    // 加载项目队列
+    async loadProjectQueue() {
+      try {
+        if (window.electronAPI?.getProjectList) {
+          const result = await window.electronAPI.getProjectList();
+          if (result.success) {
+            // 显示正在训练或等待中的项目
+            this.projectQueue = (result.data || []).filter(project => 
+              project.status !== 'completed'
+            );
+            console.log('[项目队列] 已加载', this.projectQueue.length, '个项目（已过滤已完成）');
+          }
+        } else {
+          console.warn('[项目队列] getProjectList API 不可用');
+          // 使用模拟数据测试
+          this.projectQueue = [
+            {
+              projectId: 'project_20250405_1430_abc',
+              name: 'Lego Scene Training',
+              outputPath: 'E:/outputs/lego/',
+              lastModified: new Date().toISOString(),
+              status: 'training',
+              currentIteration: 18700,
+              stage: 'stage1'
+            }
+          ];
+        }
+      } catch (error) {
+        console.error('[项目队列] 加载失败:', error);
+        this.projectQueue = [];
+      }
+    },
+    
+    // 获取状态文本
+    getStatusText(status) {
+      const statusMap = {
+        waiting: '等待中',
+        training: '训练中',
+        baking: 'Baking 中',
+        paused: '已暂停',
+        completed: '已完成',
+        error: '错误',
+        disconnected: '已断开'
+      };
+      return statusMap[status] || status;
+    },
+    
+    // 获取状态样式类
+    getStatusClass(status) {
+      const classMap = {
+        waiting: 'status-waiting',
+        training: 'status-training',
+        baking: 'status-baking',
+        paused: 'status-paused',
+        completed: 'status-completed',
+        error: 'status-error',
+        disconnected: 'status-disconnected'
+      };
+      return classMap[status] || '';
+    },
+    
+    async resumeProject(project) {
+      console.log('[恢复项目] 准备恢复:', project);
+      
+      try {
+        if (project.outputPath) {
+          await this.loadLatestRenderedImage(project.outputPath);
+        }
+        const query = {
+          resumeProjectId: project.projectId
+        };
+        if (this.latestRenderedImage) {
+          query.initialPreviewImage = this.latestRenderedImage;
+        }
+        this.$router.push({
+          path: '/train',
+          query
+        });
+      } catch (error) {
+        console.error('[恢复项目] 跳转失败:', error);
+        alert('恢复项目失败：' + error.message);
+      }
+    },
+    
+    // 格式化最后修改时间
+    formatLastModified(isoString) {
+      if (!isoString) return '';
+      const date = new Date(isoString);
+      const now = new Date();
+      const diffMs = now - date;
+      const diffMinutes = Math.floor(diffMs / 60000);
+      const diffHours = Math.floor(diffMs / 3600000);
+      const diffDays = Math.floor(diffMs / 86400000);
+      
+      if (diffMinutes < 1) {
+        return '刚刚';
+      } else if (diffMinutes < 60) {
+        return `${diffMinutes}分钟前`;
+      } else if (diffHours < 24) {
+        return `${diffHours}小时前`;
+      } else if (diffDays < 7) {
+        return `${diffDays}天前`;
+      } else {
+        return date.toLocaleDateString('zh-CN');
+      }
+    },
+    
+    // 计算进度
+    getProgressPercent(project) {
+      if (!project.currentIteration || !project.totalIterations) {
+        return 0;
+      }
+      return Math.min(100, Math.round((project.currentIteration / project.totalIterations) * 100));
+    },
+    
+    // 加载图像
+    async loadLatestRenderedImage(modelPath) {
+      if (!modelPath) {
+        console.log('[渲染图] 模型路径为空，跳过加载');
+        return;
+      }
+      
+      this.renderedImageLoading = true;
+      this.latestRenderedImage = null;
+      this.renderedImagePath = null;
+      
+      try {
+        const result = await window.electronAPI?.getLatestRenderedImage(modelPath);
+        
+        if (result && result.success && result.imageBase64) {
+          const imageUrl = result.imageBase64;
+          
+          console.log('[渲染图] 找到最新渲染图:', result.imagePath);
+          console.log('[渲染图] Base64 图片大小:', (imageUrl.length / 1024).toFixed(2), 'KB');
+          
+          // 预加载图片
+          const img = new Image();
+          img.onload = () => {
+            this.latestRenderedImage = imageUrl;
+            this.renderedImagePath = result.imagePath;
+            console.log('[渲染图] 图片加载成功');
+          };
+          img.onerror = (err) => {
+            console.error('[渲染图] 图片加载失败:', err);
+            this.latestRenderedImage = null;
+          };
+          img.src = imageUrl;
+        } else {
+          console.log('[渲染图] 未找到渲染图像');
+          if (result?.error) {
+            console.log('[渲染图] 错误信息:', result.error);
+          }
+          this.latestRenderedImage = null;
+        }
+      } catch (error) {
+        console.error('[渲染图] 加载失败:', error);
+        this.latestRenderedImage = null;
+      } finally {
+        this.renderedImageLoading = false;
       }
     },
   }
@@ -880,7 +1016,7 @@ export default {
   display: flex;
   flex-direction: column;
   height: 100%;
-  min-height: 32rem; /* 确保最小高度 */
+  min-height: 32rem;
 }
 
 .card-header {
@@ -888,7 +1024,7 @@ export default {
   justify-content: space-between;
   align-items: flex-start;
   margin-bottom: 1rem;
-  flex-shrink: 0; /* 防止头部被压缩 */
+  flex-shrink: 0;
 }
 
 .gpu-stats {
@@ -915,8 +1051,8 @@ export default {
 
 .chart-container {
   width: 100%;
-  flex: 1; /* 占据剩余空间 */
-  min-height: 20rem; /* 最小高度确保图表可见 */
+  flex: 1; 
+  min-height: 20rem;
   position: relative;
 }
 
@@ -928,7 +1064,7 @@ export default {
   padding-top: 1rem;
   border-top: 1px solid #e2e8f0;
   font-size: 0.875rem;
-  flex-shrink: 0; /* 防止底部信息被压缩 */
+  flex-shrink: 0; 
 }
 
 .gpu-selector-container {
@@ -1054,6 +1190,97 @@ export default {
 
 .no-gpus-text {
   font-size: 0.875rem;
+}
+
+.no-projects {
+  padding: 2rem;
+  text-align: center;
+  color: #64748b;
+}
+
+.no-projects-icon {
+  font-size: 3rem;
+  margin-bottom: 1rem;
+}
+
+.no-projects-text {
+  font-size: 1rem;
+  font-weight: 500;
+  margin-bottom: 0.5rem;
+}
+
+.no-projects-hint {
+  font-size: 0.875rem;
+  color: #94a3b8;
+}
+
+.queue-item {
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.queue-item:hover {
+  background-color: #f8fafc;
+  transform: translateX(2px);
+}
+
+.item-details {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  font-size: 0.75rem;
+  color: #64748b;
+}
+
+.detail-separator {
+  color: #cbd5e1;
+}
+
+.detail-time {
+  color: #94a3b8;
+}
+
+.status-badge {
+  padding: 0.25rem 0.75rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.status-waiting {
+  background-color: #f1f5f9;
+  color: #475569;
+}
+
+.status-training {
+  background-color: #dbeafe;
+  color: #1e40af;
+}
+
+.status-baking {
+  background-color: #ffedd5;
+  color: #9a3412;
+}
+
+.status-paused {
+  background-color: #fef3c7;
+  color: #92400e;
+}
+
+.status-completed {
+  background-color: #dcfce7;
+  color: #166534;
+}
+
+.status-error {
+  background-color: #fee2e2;
+  color: #991b1b;
+}
+
+.status-disconnected {
+  background-color: #e2e8f0;
+  color: #475569;
 }
 
 .refresh-status {
@@ -1184,7 +1411,6 @@ export default {
   50% { opacity: 0; }
 }
 
-/* 响应式设计优化 */
 @media (max-width: 1024px) {
   .dashboard-grid {
     grid-template-columns: 1fr;
@@ -1232,7 +1458,7 @@ export default {
     padding: 1rem;
   }
 }
-</style>
+
 
 .error-display {
   display: flex;
@@ -1270,7 +1496,6 @@ export default {
   max-width: 80%;
 }
 
-/* GPU选择弹窗样式 */
 .modal-overlay {
   position: fixed;
   top: 0;
@@ -1469,3 +1694,4 @@ export default {
   background-color: #f1f5f9;
   color: #8b5cf6;
 }
+</style>
